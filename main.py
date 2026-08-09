@@ -7,14 +7,16 @@ Para usar o modelo customizado, modifique a seção CONFIGURAÇÃO DO MODELO.
 """
 
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.agents import AgentExecutor, create_openai_functions_agent
-from langchain.tools import tool
-from langchain.memory import ConversationBufferMemory
+from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage
+from langgraph.prebuilt import create_react_agent
 import os
 from datetime import datetime
 from typing import Dict, List, Optional
+from dotenv import load_dotenv
+
+# Carrega variáveis de ambiente do arquivo .env
+load_dotenv()
 
 
 # ========== CONFIGURAÇÃO DO MODELO ==========
@@ -24,53 +26,32 @@ def criar_llm_openai():
     Modelo OpenAI para desenvolvimento inicial.
     """
     return ChatOpenAI(
-        model="gpt-4",
+        model="gpt-4o-mini",  # Modelo mais acessível
         temperature=0.3,  # Baixa temperatura para respostas mais precisas
         api_key=os.getenv("OPENAI_API_KEY")
     )
 
 
-# OPÇÃO 2: Usar modelo fine-tuned local (LLaMA, Falcon, etc.)
-def criar_llm_finetuned():
+# OPÇÃO 2: Usar modelo local GRATUITO via Ollama
+def criar_llm_local():
     """
-    SUBSTITUA ESTA FUNÇÃO quando tiver o modelo fine-tuned pronto.
-
-    Exemplos de integração:
-
-    1. Para modelo local via Ollama:
-        from langchain_community.llms import Ollama
-        return Ollama(
-            model="llama2-medical-finetuned",
-            temperature=0.3
-        )
-
-    2. Para modelo via HuggingFace:
-        from langchain_community.llms import HuggingFacePipeline
-        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-
-        model_id = "caminho/para/seu/modelo/finetuned"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-
-        pipe = pipeline(
-            "text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            max_new_tokens=512,
-            temperature=0.3
-        )
-
-        return HuggingFacePipeline(pipeline=pipe)
-
-    3. Para modelo via API customizada:
-        from langchain_community.llms import TextGen
-        return TextGen(
-            model_url="http://localhost:5000/api/generate",
-            temperature=0.3
-        )
+    Modelo local gratuito usando Ollama.
+    Primeiro instale o Ollama em https://ollama.ai
+    Depois rode: ollama pull llama3.2
     """
-    # Por enquanto, retorna OpenAI como placeholder
-    return criar_llm_openai()
+    try:
+        from langchain_ollama import ChatOllama
+        return ChatOllama(
+            model="llama3.2",
+            temperature=0.3
+        )
+    except Exception as e:
+        print(f"\n⚠️  Erro ao carregar modelo local: {e}")
+        print("Para usar modelo local gratuito:")
+        print("1. Instale Ollama: https://ollama.ai")
+        print("2. Execute: ollama pull llama3.2")
+        print("3. Execute: pip install langchain-ollama")
+        raise
 
 
 # ========== SIMULAÇÃO DE BASE DE DADOS ==========
@@ -258,8 +239,10 @@ def criar_assistente_medico():
     Cria o assistente médico virtual com LangChain.
     """
 
-    # Escolha do modelo (trocar para criar_llm_finetuned() quando disponível)
-    llm = criar_llm_finetuned()  # ou criar_llm_openai() para desenvolvimento
+    # Escolha do modelo
+    # Use criar_llm_local() para modelo gratuito local
+    # Use criar_llm_openai() se tiver créditos na OpenAI
+    llm = criar_llm_local()
 
     # Ferramentas disponíveis para o assistente
     tools = [
@@ -270,7 +253,7 @@ def criar_assistente_medico():
     ]
 
     # Prompt do sistema - define o comportamento do assistente
-    system_message = SystemMessage(content="""
+    system_message = """
 Você é um assistente médico virtual especializado do hospital, treinado com os protocolos e procedimentos internos.
 
 SUAS RESPONSABILIDADES:
@@ -292,26 +275,15 @@ LIMITAÇÕES:
 - Você é um auxiliar, não substitui o julgamento clínico do médico
 - Sempre que relevante, mencione a necessidade de avaliação presencial
 - Indique quando uma conduta foge do escopo dos protocolos padrão
-""")
+"""
 
-    # Template do prompt com histórico de conversa
-    prompt = ChatPromptTemplate.from_messages([
-        system_message,
-        MessagesPlaceholder(variable_name="chat_history", optional=True),
-        ("human", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad")
-    ])
+    # Adiciona a mensagem do sistema ao modelo
+    llm_with_system = llm.bind(system_message=system_message)
 
-    # Criação do agente
-    agent = create_openai_functions_agent(llm, tools, prompt)
-
-    # Executor do agente com memória
-    agent_executor = AgentExecutor(
-        agent=agent,
-        tools=tools,
-        verbose=True,  # Mostra o raciocínio do agente
-        max_iterations=5,  # Limita iterações para evitar loops
-        handle_parsing_errors=True
+    # Criação do agente com langgraph
+    agent_executor = create_react_agent(
+        model=llm_with_system,
+        tools=tools
     )
 
     return agent_executor
@@ -352,9 +324,9 @@ def executar_assistente():
 
             print("\n🤖 Assistente processando...\n")
 
-            resposta = assistente.invoke({"input": pergunta})
+            resposta = assistente.invoke({"messages": [("user", pergunta)]})
 
-            print(f"\n💡 Assistente: {resposta['output']}\n")
+            print(f"\n💡 Assistente: {resposta['messages'][-1].content}\n")
             print("-" * 70 + "\n")
 
         except KeyboardInterrupt:
@@ -389,8 +361,8 @@ def demonstrar_uso():
         print('='*70)
 
         try:
-            resposta = assistente.invoke({"input": pergunta})
-            print(f"\n💡 Resposta: {resposta['output']}\n")
+            resposta = assistente.invoke({"messages": [("user", pergunta)]})
+            print(f"\n💡 Resposta: {resposta['messages'][-1].content}\n")
         except Exception as e:
             print(f"\n❌ Erro: {str(e)}\n")
 
