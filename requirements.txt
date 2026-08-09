@@ -1,0 +1,21 @@
+# Dependências principais do projeto
+langchain>=0.1.0
+langchain-openai>=0.0.5
+langchain-community>=0.0.20
+
+# Para quando integrar o modelo fine-tuned
+# Descomente conforme necessário:
+
+# Se usar Ollama (modelo local)
+# ollama
+
+# Se usar HuggingFace
+# transformers>=4.36.0
+# torch>=2.1.0
+# accelerate>=0.25.0
+
+# Se usar APIs customizadas
+# requests>=2.31.0
+
+# Utilidades
+python-dotenv>=1.0.0
