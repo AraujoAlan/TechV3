@@ -1,4 +1,4 @@
-# 🏥 Assistente Médico Virtual - Tech Challenge Etapa 2
+# 🏥 Assistente Médico Virtual - Tech Challenge Etapa 3
 
 Sistema de assistente médico virtual desenvolvido com **LangChain**, capaz de auxiliar em condutas clínicas, responder dúvidas de médicos e sugerir procedimentos baseados nos protocolos internos do hospital.
 
