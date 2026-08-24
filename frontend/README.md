@@ -58,45 +58,17 @@ src/
 
 ## Contrato da API
 
-O frontend já está escrito contra este contrato. Enquanto ele não existir,
-`VITE_USE_MOCK=true` mantém a UI funcionando com `src/api/mock.ts` — mesmo
-formato de eventos, streaming incluído. Para plugar o backend real, basta
-`VITE_USE_MOCK=false`; nenhum componente muda.
+A especificação completa do que o backend precisa expor está em
+[`CONTRATO.md`](CONTRATO.md): corpo da requisição, os seis eventos do stream
+SSE, tratamento de erro e checklist de aceite. Em código, a fonte da verdade é
+[`src/api/types.ts`](src/api/types.ts).
 
-### `POST /api/chat` → `text/event-stream`
+Resumo: `POST /api/chat` recebe o histórico em JSON e responde
+`text/event-stream`; `GET /api/health` alimenta o indicador do cabeçalho.
 
-```jsonc
-// corpo da requisição
-{
-  "messages": [{ "role": "user", "content": "Mostre o prontuário da 12345" }],
-  "conversationId": "conv_a1b2c3d4"   // opcional, mantém a memória no backend
-}
-```
-
-Cada evento SSE carrega um JSON no campo `data`:
-
-```
-data: {"type":"tool_start","id":"t1","name":"buscar_prontuario","input":{"paciente_id":"12345"}}
-data: {"type":"tool_end","id":"t1","output":"Prontuário encontrado: 34 anos…"}
-data: {"type":"token","content":"A "}
-data: {"type":"token","content":"paciente "}
-data: {"type":"sources","sources":[{"id":"s1","title":"Protocolo v2.1","kind":"protocolo","snippet":"…"}]}
-data: {"type":"done","messageId":"msg_9f","conversationId":"conv_a1b2c3d4"}
-```
-
-Em caso de falha tratada: `{"type":"error","message":"…"}`. O parser ignora
-eventos malformados em vez de derrubar a conversa, e aceita a sentinela
-`data: [DONE]` para encerrar o turno.
-
-Os tipos são o mapeamento quase 1:1 do `astream_events` do LangGraph:
-`on_tool_start` → `tool_start`, `on_tool_end` → `tool_end`,
-`on_chat_model_stream` → `token`.
-
-### `GET /api/health` → `200 OK`
-
-Só alimenta o indicador no cabeçalho (`Dados simulados` / `API conectada` /
-`API indisponível`), para não haver dúvida na gravação da demo sobre a origem
-das respostas.
+Enquanto a API não existir, `VITE_USE_MOCK=true` mantém a UI funcionando com
+`src/api/mock.ts` — mesmo formato de eventos, streaming incluído. Para plugar o
+backend real basta `VITE_USE_MOCK=false`; nenhum componente muda.
 
 ## Requisitos da Fase 3 refletidos na UI
 
