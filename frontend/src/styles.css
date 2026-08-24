@@ -1,0 +1,93 @@
+@import 'tailwindcss';
+
+/*
+ * Tokens de cor. O tema claro fica no `@theme` (vira `:root`), e o escuro
+ * apenas sobrescreve as mesmas variáveis — as utilities do Tailwind já
+ * apontam para `var(--color-*)`, então nada mais precisa mudar.
+ */
+@theme {
+  --color-canvas: #fbfbfa;
+  --color-surface: #ffffff;
+  --color-raised: #f5f5f4;
+  --color-line: #e7e5e4;
+  --color-ink: #1c1917;
+  --color-muted: #78716c;
+  --color-faint: #a8a29e;
+  --color-accent: #0d7d72;
+  --color-accent-ink: #ffffff;
+  --color-accent-soft: #eaf4f2;
+  --color-danger: #b4342a;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-canvas: #0b0c0c;
+    --color-surface: #151717;
+    --color-raised: #1c1f1f;
+    --color-line: #282c2c;
+    --color-ink: #e8e6e3;
+    --color-muted: #9a9490;
+    --color-faint: #6b6763;
+    --color-accent: #3fb8a8;
+    --color-accent-ink: #06201d;
+    --color-accent-soft: #14302c;
+    --color-danger: #e0776c;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* O cursor piscando no fim do texto enquanto os tokens chegam. */
+@keyframes caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  55%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.stream-caret {
+  display: inline-block;
+  width: 0.45rem;
+  height: 1.05em;
+  margin-left: 0.15rem;
+  vertical-align: text-bottom;
+  background-color: var(--color-accent);
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+/* Barra de rolagem discreta, para não competir com o conteúdo. */
+@supports (scrollbar-width: thin) {
+  .subtle-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::after,
+  *::before {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
