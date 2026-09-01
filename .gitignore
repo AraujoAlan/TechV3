@@ -1,0 +1,22 @@
+# Segredos
+.env
+.env.local
+
+# Dados derivados do MedPT (interacao real paciente-medico, nao versionar)
+data/
+*.parquet
+*.jsonl
+notebooks/*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Ferramentas
+.idea/
+.vscode/
+.ruff_cache/
+.pytest_cache/
