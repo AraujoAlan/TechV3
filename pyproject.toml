@@ -8,7 +8,7 @@ dependencies = [
     "langchain-ollama>=0.2.0",
     "python-dotenv>=1.2.2",
     "langgraph>=0.2.60",
-    "datasets>=5.0.1",
+    "datasets>4.1.0,<4.4.0",
     "duckdb>=1.5.5",
     "matplotlib>=3.11.1",
     "openai>=3.3.1",
@@ -16,4 +16,11 @@ dependencies = [
     "sentence-transformers>=6.0.0",
     "scikit-learn>=1.9.0",
     "huggingface-hub>=1.28.0",
+    "unsloth>=2026.9.4",
+    "unsloth-zoo>=2026.9.3",
+    # Tetos impostos pelo unsloth 2026.9.4. O piso de transformers e do Qwen3.5,
+    # que so existe a partir da v5.2 -- a faixa 5.2..5.5 satisfaz os dois.
+    "transformers>=5.2,<=5.5.0",
+    "trl>=0.18.2,<=0.24.0",
+    "torch>=2.4,<2.13",
 ]
