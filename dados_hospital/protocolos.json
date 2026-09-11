@@ -1,0 +1,187 @@
+{
+  "aviso": "Protocolos institucionais FICTÍCIOS, escritos para este trabalho acadêmico. Não são diretriz clínica e não devem orientar atendimento real. Servem para demonstrar a consulta a protocolo interno pelo assistente.",
+  "versao": "1.0",
+  "protocolos": [
+    {
+      "id": "PROT-OBS-001",
+      "titulo": "Síndromes hipertensivas da gestação",
+      "condicao": "pré-eclâmpsia",
+      "cid": "O10-O16",
+      "resumo": "Conduta institucional para gestante com pressão arterial elevada a partir de 20 semanas.",
+      "condutas": [
+        "Confirmar PA com duas aferições separadas por no mínimo 4 horas, gestante em repouso.",
+        "Solicitar proteinúria, hemograma com plaquetas, função renal, TGO/TGP e LDH.",
+        "Investigar sinais de gravidade: cefaleia persistente, alteração visual, dor epigástrica, oligúria.",
+        "Classificar o quadro e definir com o obstetra responsável se o acompanhamento é ambulatorial ou internação.",
+        "Havendo critério de gravidade, acionar a equipe de plantão antes de qualquer conduta medicamentosa."
+      ],
+      "acionar_equipe": "PA ≥ 160/110 mmHg, sinais de iminência de eclâmpsia ou plaquetas abaixo de 100 mil.",
+      "cid_prefixos": [
+        "O10",
+        "O11",
+        "O12",
+        "O13",
+        "O14",
+        "O15",
+        "O16"
+      ]
+    },
+    {
+      "id": "PROT-OBS-002",
+      "titulo": "Hemorragia pós-parto",
+      "condicao": "hemorragia pós-parto",
+      "cid": "O72",
+      "resumo": "Resposta institucional ao sangramento aumentado nas primeiras 24 horas após o parto.",
+      "condutas": [
+        "Reconhecer precocemente: perda estimada acima de 500 ml no parto vaginal ou 1000 ml na cesárea, ou qualquer perda com repercussão hemodinâmica.",
+        "Acionar imediatamente a equipe de plantão — esta é uma emergência obstétrica.",
+        "Investigar a causa pelos quatro T: tônus, trauma, tecido e trombina.",
+        "Monitorar sinais vitais e diurese de forma contínua; garantir dois acessos venosos calibrosos.",
+        "Manter o banco de sangue avisado enquanto a causa não estiver controlada."
+      ],
+      "acionar_equipe": "Sempre. Hemorragia pós-parto é acionamento imediato, sem esperar confirmação diagnóstica.",
+      "cid_prefixos": [
+        "O72"
+      ]
+    },
+    {
+      "id": "PROT-OBS-003",
+      "titulo": "Trabalho de parto prematuro",
+      "condicao": "trabalho de parto prematuro",
+      "cid": "O60",
+      "resumo": "Avaliação de contrações regulares antes de 37 semanas de idade gestacional.",
+      "condutas": [
+        "Confirmar a idade gestacional pela melhor datação disponível antes de qualquer decisão.",
+        "Documentar dinâmica uterina e avaliação cervical.",
+        "Descartar infecção urinária e rotura prematura de membranas.",
+        "Discutir com o obstetra responsável a indicação de corticoterapia antenatal e de neuroproteção.",
+        "Verificar disponibilidade de vaga em UTI neonatal; não havendo, discutir transferência com a equipe."
+      ],
+      "acionar_equipe": "Idade gestacional abaixo de 34 semanas, ou ausência de vaga neonatal.",
+      "cid_prefixos": [
+        "O60"
+      ]
+    },
+    {
+      "id": "PROT-OBS-004",
+      "titulo": "Diabetes na gestação",
+      "condicao": "diabetes gestacional",
+      "cid": "O24",
+      "resumo": "Rastreio e acompanhamento da hiperglicemia identificada durante a gestação.",
+      "condutas": [
+        "Rastrear com glicemia de jejum na primeira consulta e TOTG entre 24 e 28 semanas.",
+        "Iniciar orientação nutricional e registro de glicemias capilares como primeira medida.",
+        "Reavaliar o controle após duas semanas de medida não farmacológica.",
+        "Persistindo alvos fora da meta, discutir terapia farmacológica com o obstetra responsável.",
+        "Programar acompanhamento do crescimento fetal e reavaliação no puerpério."
+      ],
+      "acionar_equipe": "Glicemias persistentemente descontroladas ou suspeita de macrossomia.",
+      "cid_prefixos": [
+        "O24"
+      ]
+    },
+    {
+      "id": "PROT-NEO-001",
+      "titulo": "Icterícia neonatal",
+      "condicao": "icterícia neonatal",
+      "cid": "P58-P59",
+      "resumo": "Avaliação do recém-nascido com icterícia, o achado mais frequente da pediatria neste hospital.",
+      "condutas": [
+        "Registrar idade em horas de vida: a interpretação do valor de bilirrubina depende dela.",
+        "Icterícia nas primeiras 24 horas de vida é sempre investigação, nunca observação isolada.",
+        "Solicitar bilirrubinas total e frações, tipagem sanguínea, Coombs direto e hematócrito.",
+        "Plotar o resultado em curva por hora de vida e idade gestacional para definir conduta.",
+        "Indicação de fototerapia e alta são decisões do pediatra responsável."
+      ],
+      "acionar_equipe": "Icterícia nas primeiras 24 horas, sinais de encefalopatia bilirrubínica ou valores em zona de exsanguineotransfusão.",
+      "cid_prefixos": [
+        "P58",
+        "P59"
+      ]
+    },
+    {
+      "id": "PROT-OBS-005",
+      "titulo": "Sangramento no primeiro trimestre",
+      "condicao": "ameaça de abortamento",
+      "cid": "O03, O20",
+      "resumo": "Avaliação de sangramento vaginal antes de 20 semanas.",
+      "condutas": [
+        "Estabilidade hemodinâmica é a primeira avaliação, antes de qualquer investigação etiológica.",
+        "Solicitar beta-hCG quantitativo e ultrassonografia transvaginal.",
+        "Afastar gravidez ectópica — é a hipótese que muda a urgência de toda a conduta.",
+        "Caracterizar o tipo de abortamento pelo exame do colo e pelos achados ultrassonográficos.",
+        "Definir conduta expectante, medicamentosa ou cirúrgica junto ao obstetra responsável."
+      ],
+      "acionar_equipe": "Instabilidade hemodinâmica, suspeita de gravidez ectópica ou sinais de infecção.",
+      "cid_prefixos": [
+        "O00",
+        "O02",
+        "O03",
+        "O04",
+        "O05",
+        "O06",
+        "O08",
+        "O20"
+      ]
+    },
+    {
+      "id": "PROT-OBS-006",
+      "titulo": "Assistência ao parto",
+      "condicao": "trabalho de parto",
+      "cid": "O80-O84",
+      "cid_prefixos": [
+        "O80",
+        "O81",
+        "O82",
+        "O83",
+        "O84"
+      ],
+      "resumo": "Acompanhamento do trabalho de parto a termo sem intercorrência identificada.",
+      "condutas": [
+        "Confirmar idade gestacional, apresentação fetal e condições de bolsa na admissão.",
+        "Registrar dinâmica uterina, batimentos cardíacos fetais e evolução da dilatação em partograma.",
+        "Respeitar o plano de parto quando houver, discutindo divergências com a gestante.",
+        "Garantir acompanhante e via de parto definida com o obstetra responsável.",
+        "No pós-parto imediato, vigiar sangramento e tônus uterino na primeira hora."
+      ],
+      "acionar_equipe": "Parada de progressão, alteração de batimentos fetais ou sangramento aumentado no pós-parto."
+    },
+    {
+      "id": "PROT-OBS-007",
+      "titulo": "Rotura prematura de membranas",
+      "condicao": "rotura prematura de membranas",
+      "cid": "O42",
+      "cid_prefixos": [
+        "O42"
+      ],
+      "resumo": "Conduta na perda de líquido amniótico antes do início do trabalho de parto.",
+      "condutas": [
+        "Confirmar a rotura pelo exame especular; evitar toque vaginal repetido, que aumenta risco de infecção.",
+        "Registrar o horário da rotura — o tempo de bolsa rota orienta toda a conduta seguinte.",
+        "Estimar idade gestacional e avaliar vitalidade fetal.",
+        "Vigiar sinais de corioamnionite: febre materna, taquicardia, líquido com odor, dor uterina.",
+        "Definir com o obstetra responsável entre conduta expectante e resolução da gestação."
+      ],
+      "acionar_equipe": "Sinais de infecção, sofrimento fetal ou idade gestacional abaixo de 34 semanas."
+    },
+    {
+      "id": "PROT-NEO-002",
+      "titulo": "Recém-nascido prematuro ou de baixo peso",
+      "condicao": "prematuridade",
+      "cid": "P05-P07",
+      "cid_prefixos": [
+        "P05",
+        "P07"
+      ],
+      "resumo": "Cuidado imediato ao recém-nascido de idade gestacional ou peso abaixo do esperado.",
+      "condutas": [
+        "Classificar por idade gestacional e peso ao nascer antes de definir o local de cuidado.",
+        "Priorizar controle térmico desde a sala de parto — hipotermia piora todos os desfechos.",
+        "Monitorar glicemia, saturação e esforço respiratório nas primeiras horas.",
+        "Estimular contato pele a pele e aleitamento quando as condições clínicas permitirem.",
+        "Indicação de suporte ventilatório e de internação em UTI neonatal são decisões do pediatra responsável."
+      ],
+      "acionar_equipe": "Desconforto respiratório, instabilidade térmica persistente ou peso abaixo de 1.500 g."
+    }
+  ]
+}

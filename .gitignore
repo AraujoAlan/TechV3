@@ -27,6 +27,9 @@ llama.cpp/
 *.gguf
 *.safetensors
 
+# Auditoria e alertas gerados em execucao
+logs/
+
 # Python
 __pycache__/
 *.py[cod]
