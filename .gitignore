@@ -1,0 +1,35 @@
+# Segredos
+.env
+.env.local
+
+# Dados derivados do MedPT (interacao real paciente-medico, nao versionar)
+data/
+*.parquet
+*.jsonl
+notebooks/*.json
+
+# Excecao: a amostra publicada no repositorio e entregavel da fase.
+# Funciona porque dataset_exemplo/ nao esta dentro de diretorio ignorado --
+# negacao sob diretorio excluido (como data/) seria inerte.
+!dataset_exemplo/*.jsonl
+
+# Artefatos de treino: pesos, checkpoints e cache do unsloth
+modelos/
+outputs/
+unsloth_compiled_cache/
+llama.cpp/
+*.gguf
+*.safetensors
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Ferramentas
+.idea/
+.vscode/
+.ruff_cache/
+.pytest_cache/
