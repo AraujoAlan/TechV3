@@ -65,45 +65,36 @@ def criar_llm_finetuned():
     Modelo fine-tuned customizado do HuggingFace.
     Usa o modelo treinado no notebook 05_treino.ipynb
     """
-    try:
-        from langchain_community.llms import HuggingFacePipeline
-        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-        import torch
+    from langchain_community.llms import HuggingFacePipeline
+    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+    import torch
 
-        # Caminho do modelo fine-tuned no HuggingFace
-        model_id = "emidiosouza/assistente-maternidade"
+    # Caminho do modelo fine-tuned no HuggingFace
+    model_id = "emidiosouza/assistente-maternidade"
 
-        print(f"\n🔄 Carregando modelo fine-tuned: {model_id}")
-        print("⏳ Isso pode levar alguns minutos na primeira execução...\n")
+    print(f"\n🔄 Carregando modelo fine-tuned: {model_id}")
+    print("⏳ Isso pode levar alguns minutos na primeira execução...\n")
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            device_map="auto",
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            low_cpu_mem_usage=True
-        )
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        device_map="auto",
+        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+        low_cpu_mem_usage=True
+    )
 
-        pipe = pipeline(
-            "text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            max_new_tokens=512,
-            temperature=0.3,
-            do_sample=True,
-            repetition_penalty=1.1
-        )
+    pipe = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=512,
+        temperature=0.3,
+        do_sample=True,
+        repetition_penalty=1.1
+    )
 
-        print("✅ Modelo fine-tuned carregado com sucesso!\n")
-        return HuggingFacePipeline(pipeline=pipe)
-
-    except Exception as e:
-        print(f"\n⚠️  Erro ao carregar modelo fine-tuned: {e}")
-        print("\nPara usar o modelo fine-tuned:")
-        print("1. Execute: pip install transformers torch accelerate")
-        print("2. Certifique-se de ter pelo menos 8GB de RAM/VRAM")
-        print("\nUsando modelo local como fallback...\n")
-        return criar_llm_local()
+    print("✅ Modelo fine-tuned carregado com sucesso!\n")
+    return HuggingFacePipeline(pipeline=pipe)
 
 
 # ========== BASE DE DADOS ESTRUTURADA ==========
