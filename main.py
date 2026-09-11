@@ -9,7 +9,10 @@ Para usar o modelo customizado, modifique a seção CONFIGURAÇÃO DO MODELO.
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage
-from langgraph.prebuilt import create_react_agent
+try:
+    from langchain.agents import create_react_agent as create_agent
+except ImportError:
+    from langgraph.prebuilt import create_react_agent as create_agent
 from langgraph.checkpoint.memory import MemorySaver
 import os
 import sqlite3
@@ -520,7 +523,7 @@ LIMITAÇÕES:
     memory = MemorySaver()
 
     # Criação do agente com langgraph e memory
-    agent_executor = create_react_agent(
+    agent_executor = create_agent(
         model=llm,
         tools=tools,
         checkpointer=memory  # Adiciona memória para contexto persistente
@@ -589,6 +592,12 @@ def executar_assistente(usar_modelo_finetuned: bool = False):
             print(f"\n💡 Assistente: {resposta['messages'][-1].content}\n")
             print("-" * 70 + "\n")
 
+        except EOFError:
+            # Ambiente sem input interativo
+            print("\n⚠️  Ambiente não suporta input interativo.")
+            print("Execute em um terminal normal para usar o modo interativo.\n")
+            db.fechar()
+            break
         except KeyboardInterrupt:
             print("\n\n👋 Encerrando assistente. Até logo!")
             db.fechar()
@@ -632,6 +641,12 @@ def demonstrar_uso():
 
 if __name__ == "__main__":
     import sys
+    import io
+
+    # Configurar encoding UTF-8 no Windows
+    if sys.platform == 'win32':
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
     # Configuração de linha de comando
     usar_finetuned = "--finetuned" in sys.argv or "-f" in sys.argv
