@@ -143,10 +143,14 @@ SELECT * FROM exames WHERE status = 'pendente';
 
 ## 📊 Estrutura para Mostrar no Vídeo
 
-### **1. README.md** (1 min)
-- Arquitetura completa (linha 145-179)
-- Diagrama do pipeline
-- Schema do banco de dados (linha 209-240)
+### **1. DIAGRAMA_FLUXO.md + README.md** (1 min)
+- **DIAGRAMA_FLUXO.md:** 📊 ABRIR ESTE ARQUIVO PRIMEIRO!
+  - Diagramas Mermaid interativos (renderizam no GitHub/VS Code)
+  - Fluxo sequencial completo
+  - Padrão ReAct explicado
+  - Exemplo completo de execução
+- README.md: Arquitetura (linha 145-181)
+- README.md: Schema do BD (linha 209-240)
 
 ### **2. main.py** (1 min)
 Mostrar rapidamente:

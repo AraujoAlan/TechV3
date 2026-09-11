@@ -140,6 +140,8 @@ TechV3/
 
 ## 🏗️ Arquitetura Técnica
 
+**📊 [Ver Diagrama Completo e Interativo](DIAGRAMA_FLUXO.md)** ← Diagramas Mermaid + Fluxo detalhado
+
 ### **1. Pipeline LangChain Completo**
 
 ```
