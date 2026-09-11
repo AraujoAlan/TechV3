@@ -14,6 +14,11 @@ notebooks/*.json
 # negacao sob diretorio excluido (como data/) seria inerte.
 !dataset_exemplo/*.jsonl
 
+# Excecao: o banco que a aplicacao consulta. Dado 100% sintetico, gerado pelo
+# 07 a partir de distribuicoes do SIH/SUS -- nenhum paciente real. Versionado
+# porque o docker compose sobe sem reexecutar o pipeline.
+!dados_hospital/*.parquet
+
 # Artefatos de treino: pesos, checkpoints e cache do unsloth
 modelos/
 outputs/
