@@ -59,23 +59,32 @@ def criar_llm_local():
         raise
 
 
-# OPÇÃO 3: Usar modelo fine-tuned do HuggingFace
+# OPÇÃO 3: Usar modelo compatível para demonstração
 def criar_llm_finetuned():
     """
-    Modelo fine-tuned customizado do HuggingFace.
-    Usa o modelo treinado no notebook 05_treino.ipynb
+    Usa modelo base Qwen para demonstração do pipeline LangChain.
+
+    NOTA: O modelo fine-tuned completo está nos notebooks 05_treino.ipynb e 06_avaliacao.ipynb
+    Para o vídeo, demonstramos o pipeline LangChain funcionando com modelo base.
     """
     from langchain_community.llms import HuggingFacePipeline
     from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
     import torch
 
-    # Caminho do modelo fine-tuned no HuggingFace
-    model_id = "emidiosouza/assistente-maternidade"
+    # Usar modelo base para demonstração (leve e rápido)
+    model_id = "Qwen/Qwen2.5-1.5B-Instruct"  # Modelo menor para demo
 
-    print(f"\n🔄 Carregando modelo fine-tuned: {model_id}")
-    print("⏳ Isso pode levar alguns minutos na primeira execução...\n")
+    print(f"\n🔄 Carregando modelo para demonstração: {model_id}")
+    print("⏳ Aguarde o download (~1.5GB)...\n")
+    print("📝 NOTA: Modelo fine-tuned completo está em notebooks/05_treino.ipynb")
+    print("   Para o vídeo, demonstramos o PIPELINE LangChain funcionando.\n")
 
+    # Carregar tokenizer
+    print("   [1/2] Carregando tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+    # Carregar modelo
+    print("   [2/2] Carregando modelo...")
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         device_map="auto",
@@ -83,17 +92,17 @@ def criar_llm_finetuned():
         low_cpu_mem_usage=True
     )
 
+    # Criar pipeline
     pipe = pipeline(
         "text-generation",
         model=model,
         tokenizer=tokenizer,
-        max_new_tokens=512,
+        max_new_tokens=256,
         temperature=0.3,
-        do_sample=True,
-        repetition_penalty=1.1
+        do_sample=True
     )
 
-    print("✅ Modelo fine-tuned carregado com sucesso!\n")
+    print("\n✅ Modelo carregado! Pipeline LangChain pronto!\n")
     return HuggingFacePipeline(pipeline=pipe)
 
 
