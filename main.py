@@ -10,7 +10,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import MemorySaver
 import os
+import sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
@@ -54,65 +56,274 @@ def criar_llm_local():
         raise
 
 
-# ========== SIMULAÇÃO DE BASE DE DADOS ==========
-# Em produção, substituir por conexão real com banco de dados do hospital
+# OPÇÃO 3: Usar modelo fine-tuned do HuggingFace
+def criar_llm_finetuned():
+    """
+    Modelo fine-tuned customizado do HuggingFace.
+    Usa o modelo treinado no notebook 05_treino.ipynb
+    """
+    try:
+        from langchain_community.llms import HuggingFacePipeline
+        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+        import torch
+
+        # Caminho do modelo fine-tuned no HuggingFace
+        model_id = "emidiosouza/assistente-maternidade"
+
+        print(f"\n🔄 Carregando modelo fine-tuned: {model_id}")
+        print("⏳ Isso pode levar alguns minutos na primeira execução...\n")
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            device_map="auto",
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            low_cpu_mem_usage=True
+        )
+
+        pipe = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            max_new_tokens=512,
+            temperature=0.3,
+            do_sample=True,
+            repetition_penalty=1.1
+        )
+
+        print("✅ Modelo fine-tuned carregado com sucesso!\n")
+        return HuggingFacePipeline(pipeline=pipe)
+
+    except Exception as e:
+        print(f"\n⚠️  Erro ao carregar modelo fine-tuned: {e}")
+        print("\nPara usar o modelo fine-tuned:")
+        print("1. Execute: pip install transformers torch accelerate")
+        print("2. Certifique-se de ter pelo menos 8GB de RAM/VRAM")
+        print("\nUsando modelo local como fallback...\n")
+        return criar_llm_local()
+
+
+# ========== BASE DE DADOS ESTRUTURADA ==========
 
 class DatabaseProntuarios:
-    """Simula banco de dados de prontuários do hospital"""
+    """
+    Gerenciador de banco de dados SQLite para prontuários do hospital.
+    Em produção, substituir por PostgreSQL ou outro SGBD corporativo.
+    """
 
-    def __init__(self):
-        # Dados simulados - em produção, conectar ao banco real
-        self.prontuarios = {
-            "12345": {
-                "nome": "João Silva",
-                "idade": 45,
-                "sexo": "M",
-                "diagnosticos": ["Hipertensão", "Diabetes tipo 2"],
-                "medicamentos": ["Losartana 50mg", "Metformina 850mg"],
-                "alergias": ["Penicilina"],
-                "ultimo_atendimento": "2024-01-15"
-            },
-            "67890": {
-                "nome": "Maria Santos",
-                "idade": 62,
-                "sexo": "F",
-                "diagnosticos": ["Artrite reumatoide"],
-                "medicamentos": ["Metotrexato 15mg"],
-                "alergias": [],
-                "ultimo_atendimento": "2024-01-20"
-            }
+    def __init__(self, db_path: str = "hospital.db"):
+        """Inicializa conexão com banco de dados SQLite"""
+        self.db_path = db_path
+        self.conn = None
+        self._inicializar_banco()
+
+    def _inicializar_banco(self):
+        """Cria tabelas e popula com dados de exemplo"""
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row  # Permite acesso por nome de coluna
+
+        cursor = self.conn.cursor()
+
+        # Tabela de pacientes
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pacientes (
+                id TEXT PRIMARY KEY,
+                nome TEXT NOT NULL,
+                idade INTEGER,
+                sexo TEXT,
+                alergias TEXT,
+                ultimo_atendimento TEXT
+            )
+        """)
+
+        # Tabela de diagnósticos
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS diagnosticos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                paciente_id TEXT,
+                diagnostico TEXT,
+                data_diagnostico TEXT,
+                FOREIGN KEY (paciente_id) REFERENCES pacientes(id)
+            )
+        """)
+
+        # Tabela de medicamentos
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS medicamentos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                paciente_id TEXT,
+                medicamento TEXT,
+                dosagem TEXT,
+                data_inicio TEXT,
+                FOREIGN KEY (paciente_id) REFERENCES pacientes(id)
+            )
+        """)
+
+        # Tabela de exames
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS exames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                paciente_id TEXT,
+                tipo_exame TEXT,
+                status TEXT,
+                data_solicitacao TEXT,
+                data_realizacao TEXT,
+                FOREIGN KEY (paciente_id) REFERENCES pacientes(id)
+            )
+        """)
+
+        # Tabela de protocolos
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS protocolos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                condicao TEXT UNIQUE,
+                descricao TEXT,
+                condutas TEXT
+            )
+        """)
+
+        self.conn.commit()
+        self._popular_dados_exemplo()
+
+    def _popular_dados_exemplo(self):
+        """Popula banco com dados de exemplo se estiver vazio"""
+        cursor = self.conn.cursor()
+
+        # Verifica se já tem dados
+        cursor.execute("SELECT COUNT(*) FROM pacientes")
+        if cursor.fetchone()[0] > 0:
+            return  # Já populado
+
+        # Inserir pacientes
+        pacientes = [
+            ("12345", "João Silva", 45, "M", "Penicilina", "2024-01-15"),
+            ("67890", "Maria Santos", 62, "F", "", "2024-01-20")
+        ]
+        cursor.executemany(
+            "INSERT INTO pacientes VALUES (?, ?, ?, ?, ?, ?)",
+            pacientes
+        )
+
+        # Inserir diagnósticos
+        diagnosticos = [
+            ("12345", "Hipertensão", "2023-05-10"),
+            ("12345", "Diabetes tipo 2", "2023-06-15"),
+            ("67890", "Artrite reumatoide", "2022-11-20")
+        ]
+        cursor.executemany(
+            "INSERT INTO diagnosticos (paciente_id, diagnostico, data_diagnostico) VALUES (?, ?, ?)",
+            diagnosticos
+        )
+
+        # Inserir medicamentos
+        medicamentos = [
+            ("12345", "Losartana", "50mg", "2023-05-10"),
+            ("12345", "Metformina", "850mg", "2023-06-15"),
+            ("67890", "Metotrexato", "15mg", "2022-11-20")
+        ]
+        cursor.executemany(
+            "INSERT INTO medicamentos (paciente_id, medicamento, dosagem, data_inicio) VALUES (?, ?, ?, ?)",
+            medicamentos
+        )
+
+        # Inserir exames
+        exames = [
+            ("12345", "Hemograma completo", "pendente", "2024-01-15", None),
+            ("12345", "HbA1c", "pendente", "2024-01-15", None),
+            ("67890", "Fator reumatoide", "pendente", "2024-01-20", None)
+        ]
+        cursor.executemany(
+            "INSERT INTO exames (paciente_id, tipo_exame, status, data_solicitacao, data_realizacao) VALUES (?, ?, ?, ?, ?)",
+            exames
+        )
+
+        # Inserir protocolos
+        protocolos = [
+            ("hipertensao",
+             "Protocolo de tratamento para hipertensão arterial",
+             "1. Monitorar pressão arterial diariamente\n2. Avaliar função renal a cada 6 meses\n3. Orientar dieta hipossódica\n4. Prescrever IECA ou BRA se não houver contraindicação"),
+            ("diabetes",
+             "Protocolo de tratamento para diabetes tipo 2",
+             "1. Monitorar glicemia capilar\n2. Solicitar HbA1c a cada 3 meses\n3. Avaliar função renal e fundo de olho anualmente\n4. Iniciar com metformina se não houver contraindicação")
+        ]
+        cursor.executemany(
+            "INSERT INTO protocolos (condicao, descricao, condutas) VALUES (?, ?, ?)",
+            protocolos
+        )
+
+        self.conn.commit()
+
+    def buscar_prontuario_completo(self, paciente_id: str) -> Optional[Dict]:
+        """Busca prontuário completo do paciente com todas as informações relacionadas"""
+        cursor = self.conn.cursor()
+
+        # Buscar dados do paciente
+        cursor.execute("SELECT * FROM pacientes WHERE id = ?", (paciente_id,))
+        paciente = cursor.fetchone()
+
+        if not paciente:
+            return None
+
+        # Buscar diagnósticos
+        cursor.execute("SELECT diagnostico FROM diagnosticos WHERE paciente_id = ?", (paciente_id,))
+        diagnosticos = [row[0] for row in cursor.fetchall()]
+
+        # Buscar medicamentos
+        cursor.execute("SELECT medicamento, dosagem FROM medicamentos WHERE paciente_id = ?", (paciente_id,))
+        medicamentos = [f"{row[0]} {row[1]}" for row in cursor.fetchall()]
+
+        return {
+            "id": paciente["id"],
+            "nome": paciente["nome"],
+            "idade": paciente["idade"],
+            "sexo": paciente["sexo"],
+            "diagnosticos": diagnosticos,
+            "medicamentos": medicamentos,
+            "alergias": paciente["alergias"],
+            "ultimo_atendimento": paciente["ultimo_atendimento"]
         }
 
-        self.exames_pendentes = {
-            "12345": [
-                {"tipo": "Hemograma completo", "solicitado_em": "2024-01-15"},
-                {"tipo": "HbA1c", "solicitado_em": "2024-01-15"}
-            ],
-            "67890": [
-                {"tipo": "Fator reumatoide", "solicitado_em": "2024-01-20"}
-            ]
+    def buscar_exames_pendentes(self, paciente_id: str) -> List[Dict]:
+        """Busca exames pendentes de um paciente"""
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT tipo_exame, data_solicitacao
+            FROM exames
+            WHERE paciente_id = ? AND status = 'pendente'
+        """, (paciente_id,))
+
+        return [{"tipo": row[0], "solicitado_em": row[1]} for row in cursor.fetchall()]
+
+    def buscar_protocolo(self, condicao: str) -> Optional[Dict]:
+        """Busca protocolo médico por condição"""
+        cursor = self.conn.cursor()
+        condicao_lower = condicao.lower().replace(" ", "")
+
+        cursor.execute("""
+            SELECT descricao, condutas
+            FROM protocolos
+            WHERE LOWER(REPLACE(condicao, ' ', '')) = ?
+        """, (condicao_lower,))
+
+        protocolo = cursor.fetchone()
+        if not protocolo:
+            return None
+
+        return {
+            "descricao": protocolo[0],
+            "condutas": protocolo[1].split("\n")
         }
 
-        self.protocolos = {
-            "hipertensao": {
-                "descricao": "Protocolo de tratamento para hipertensão arterial",
-                "condutas": [
-                    "Monitorar pressão arterial diariamente",
-                    "Avaliar função renal a cada 6 meses",
-                    "Orientar dieta hipossódica",
-                    "Prescrever IECA ou BRA se não houver contraindicação"
-                ]
-            },
-            "diabetes": {
-                "descricao": "Protocolo de tratamento para diabetes tipo 2",
-                "condutas": [
-                    "Monitorar glicemia capilar",
-                    "Solicitar HbA1c a cada 3 meses",
-                    "Avaliar função renal e fundo de olho anualmente",
-                    "Iniciar com metformina se não houver contraindicação"
-                ]
-            }
-        }
+    def listar_protocolos_disponiveis(self) -> List[str]:
+        """Lista todos os protocolos disponíveis"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT condicao FROM protocolos")
+        return [row[0] for row in cursor.fetchall()]
+
+    def fechar(self):
+        """Fecha conexão com banco de dados"""
+        if self.conn:
+            self.conn.close()
 
 
 # Instância global do banco de dados
@@ -124,7 +335,8 @@ db = DatabaseProntuarios()
 @tool
 def buscar_prontuario(paciente_id: str) -> str:
     """
-    Busca informações do prontuário de um paciente pelo ID.
+    Busca informações do prontuário de um paciente pelo ID no banco de dados.
+    Retorna dados atualizados do paciente incluindo diagnósticos, medicamentos e alergias.
 
     Args:
         paciente_id: ID único do paciente no sistema
@@ -132,10 +344,12 @@ def buscar_prontuario(paciente_id: str) -> str:
     Returns:
         Informações completas do prontuário ou mensagem de erro
     """
-    prontuario = db.prontuarios.get(paciente_id)
+    prontuario = db.buscar_prontuario_completo(paciente_id)
 
     if not prontuario:
         return f"Paciente com ID {paciente_id} não encontrado no sistema."
+
+    alergias_texto = prontuario['alergias'] if prontuario['alergias'] else 'Nenhuma alergia registrada'
 
     info = f"""
 PRONTUÁRIO DO PACIENTE - ID: {paciente_id}
@@ -144,7 +358,7 @@ Idade: {prontuario['idade']} anos
 Sexo: {prontuario['sexo']}
 Diagnósticos: {', '.join(prontuario['diagnosticos'])}
 Medicamentos em uso: {', '.join(prontuario['medicamentos'])}
-Alergias: {', '.join(prontuario['alergias']) if prontuario['alergias'] else 'Nenhuma alergia registrada'}
+Alergias: {alergias_texto}
 Último atendimento: {prontuario['ultimo_atendimento']}
     """
     return info.strip()
@@ -153,7 +367,8 @@ Alergias: {', '.join(prontuario['alergias']) if prontuario['alergias'] else 'Nen
 @tool
 def verificar_exames_pendentes(paciente_id: str) -> str:
     """
-    Verifica se há exames pendentes para um paciente.
+    Verifica se há exames pendentes para um paciente consultando o banco de dados.
+    Útil para acompanhamento de solicitações médicas e gestão de procedimentos.
 
     Args:
         paciente_id: ID único do paciente no sistema
@@ -161,7 +376,7 @@ def verificar_exames_pendentes(paciente_id: str) -> str:
     Returns:
         Lista de exames pendentes ou mensagem indicando ausência
     """
-    exames = db.exames_pendentes.get(paciente_id, [])
+    exames = db.buscar_exames_pendentes(paciente_id)
 
     if not exames:
         return f"Não há exames pendentes para o paciente {paciente_id}."
@@ -176,7 +391,8 @@ def verificar_exames_pendentes(paciente_id: str) -> str:
 @tool
 def consultar_protocolo(condicao: str) -> str:
     """
-    Consulta o protocolo médico do hospital para uma condição específica.
+    Consulta o protocolo médico do hospital para uma condição específica no banco de dados.
+    Retorna diretrizes e condutas padronizadas conforme protocolos institucionais.
 
     Args:
         condicao: Nome da condição médica (ex: "hipertensao", "diabetes")
@@ -184,11 +400,11 @@ def consultar_protocolo(condicao: str) -> str:
     Returns:
         Protocolo detalhado ou mensagem de erro
     """
-    condicao_lower = condicao.lower().replace(" ", "_")
-    protocolo = db.protocolos.get(condicao_lower)
+    protocolo = db.buscar_protocolo(condicao)
 
     if not protocolo:
-        return f"Protocolo para '{condicao}' não encontrado. Protocolos disponíveis: {', '.join(db.protocolos.keys())}"
+        protocolos_disponiveis = db.listar_protocolos_disponiveis()
+        return f"Protocolo para '{condicao}' não encontrado. Protocolos disponíveis: {', '.join(protocolos_disponiveis)}"
 
     resultado = f"""
 PROTOCOLO: {protocolo['descricao']}
@@ -234,17 +450,29 @@ Status: Enviado para equipe médica
 
 # ========== CONFIGURAÇÃO DO ASSISTENTE ==========
 
-def criar_assistente_medico():
+def criar_assistente_medico(usar_modelo_finetuned: bool = False):
     """
     Cria o assistente médico virtual com LangChain.
+    Pipeline completo com:
+    - Modelo de linguagem (local, OpenAI ou fine-tuned)
+    - Tools para consulta em base de dados estruturada
+    - Memory para contexto persistente
+    - Sistema de contextualização de respostas
+
+    Args:
+        usar_modelo_finetuned: Se True, usa o modelo fine-tuned. Se False, usa Ollama local.
     """
 
     # Escolha do modelo
-    # Use criar_llm_local() para modelo gratuito local
-    # Use criar_llm_openai() se tiver créditos na OpenAI
-    llm = criar_llm_local()
+    if usar_modelo_finetuned:
+        print("\n🔬 Usando modelo fine-tuned customizado...")
+        llm = criar_llm_finetuned()
+    else:
+        print("\n🤖 Usando modelo local via Ollama...")
+        llm = criar_llm_local()
 
     # Ferramentas disponíveis para o assistente
+    # Essas ferramentas consultam o banco de dados estruturado
     tools = [
         buscar_prontuario,
         verificar_exames_pendentes,
@@ -253,37 +481,49 @@ def criar_assistente_medico():
     ]
 
     # Prompt do sistema - define o comportamento do assistente
+    # Otimizado para o modelo fine-tuned de maternidade
     system_message = """
-Você é um assistente médico virtual especializado do hospital, treinado com os protocolos e procedimentos internos.
+Você é um assistente clínico de um hospital maternidade, que apoia profissionais de saúde no acompanhamento de gestantes, puérperas e bebês até 1 ano.
+
+Você responde a médicos, em registro técnico. Você apoia a decisão clínica; você não a substitui.
 
 SUAS RESPONSABILIDADES:
 1. Auxiliar médicos com condutas clínicas baseadas nos protocolos do hospital
-2. Responder dúvidas técnicas sobre procedimentos
+2. Consultar prontuários e contextualizar respostas com dados atualizados do paciente
 3. Sugerir tratamentos conforme diretrizes internas
 4. Verificar exames pendentes e alertar a equipe quando necessário
-5. Fornecer informações contextualizadas sobre pacientes
+5. Responder dúvidas técnicas sobre procedimentos
 
 DIRETRIZES IMPORTANTES:
-- Sempre baseie suas respostas nos protocolos do hospital
-- Ao falar sobre um paciente, SEMPRE consulte o prontuário primeiro
-- Seja preciso e objetivo nas recomendações
-- Em caso de dúvida, sugira consultar um especialista
-- Registre alertas quando identificar situações críticas
+- SEMPRE consulte o prontuário do paciente antes de dar recomendações específicas
+- Baseie suas respostas nos protocolos do hospital disponíveis nas ferramentas
+- Contextualize suas respostas com os dados do paciente (idade, diagnósticos, medicamentos, alergias)
+- Nunca prescreva medicamento, dose ou conduta como determinação final: toda sugestão precisa de validação do profissional responsável
+- Quando a informação disponível não sustentar uma resposta, diga isso em vez de preencher a lacuna
+- Registre alertas quando identificar situações críticas ou inconsistências
 - NUNCA invente informações - use apenas dados disponíveis nas ferramentas
+
+FLUXO DE TRABALHO RECOMENDADO:
+1. Se a pergunta menciona um paciente específico → busque o prontuário primeiro
+2. Verifique se há exames pendentes relevantes para o caso
+3. Consulte o protocolo apropriado se houver
+4. Contextualize a resposta com os dados obtidos
+5. Se necessário, registre alertas para a equipe
 
 LIMITAÇÕES:
 - Você é um auxiliar, não substitui o julgamento clínico do médico
-- Sempre que relevante, mencione a necessidade de avaliação presencial
+- Sempre mencione a necessidade de avaliação presencial quando relevante
 - Indique quando uma conduta foge do escopo dos protocolos padrão
 """
 
-    # Adiciona a mensagem do sistema ao modelo
-    llm_with_system = llm.bind(system_message=system_message)
+    # Configuração de memória persistente para manter contexto da conversa
+    memory = MemorySaver()
 
-    # Criação do agente com langgraph
+    # Criação do agente com langgraph e memory
     agent_executor = create_react_agent(
-        model=llm_with_system,
-        tools=tools
+        model=llm,
+        tools=tools,
+        checkpointer=memory  # Adiciona memória para contexto persistente
     )
 
     return agent_executor
@@ -291,24 +531,39 @@ LIMITAÇÕES:
 
 # ========== INTERFACE DE USO ==========
 
-def executar_assistente():
+def executar_assistente(usar_modelo_finetuned: bool = False):
     """
     Função principal para executar o assistente médico.
+    Pipeline completo com consulta em base de dados estruturada e contextualização.
+
+    Args:
+        usar_modelo_finetuned: Se True, usa modelo fine-tuned. Se False, usa Ollama.
     """
     print("="*70)
     print("🏥 ASSISTENTE MÉDICO VIRTUAL - TECH CHALLENGE")
     print("="*70)
-    print("\nInicializando assistente...")
+    print("\n📊 Configuração do Pipeline LangChain:")
+    print("  ✓ Base de dados SQLite estruturada")
+    print("  ✓ Tools para consulta de prontuários e protocolos")
+    print("  ✓ Memory para contexto persistente")
+    print("  ✓ Sistema de contextualização de respostas")
 
-    assistente = criar_assistente_medico()
+    assistente = criar_assistente_medico(usar_modelo_finetuned)
 
     print("\n✅ Assistente inicializado com sucesso!")
-    print("\nFerramentas disponíveis:")
-    print("  • Buscar prontuário de paciente")
-    print("  • Verificar exames pendentes")
-    print("  • Consultar protocolos médicos")
+    print("\n🔧 Ferramentas disponíveis:")
+    print("  • Buscar prontuário de paciente (consulta BD)")
+    print("  • Verificar exames pendentes (consulta BD)")
+    print("  • Consultar protocolos médicos (consulta BD)")
     print("  • Registrar alertas para equipe")
+    print("\n💬 Exemplos de perguntas:")
+    print("  - Preciso de informações sobre o paciente 12345")
+    print("  - O paciente 12345 tem diabetes. Qual o protocolo?")
+    print("  - Quais exames estão pendentes para o paciente 67890?")
     print("\nDigite 'sair' para encerrar.\n")
+
+    # Configuração de thread para memória persistente
+    config = {"configurable": {"thread_id": "sessao_medica_1"}}
 
     # Loop de conversação
     while True:
@@ -317,6 +572,7 @@ def executar_assistente():
 
             if pergunta.lower() in ['sair', 'exit', 'quit']:
                 print("\n👋 Encerrando assistente. Até logo!")
+                db.fechar()  # Fecha conexão com banco de dados
                 break
 
             if not pergunta:
@@ -324,16 +580,23 @@ def executar_assistente():
 
             print("\n🤖 Assistente processando...\n")
 
-            resposta = assistente.invoke({"messages": [("user", pergunta)]})
+            # Invoca o assistente com memory/context
+            resposta = assistente.invoke(
+                {"messages": [("user", pergunta)]},
+                config=config  # Mantém contexto entre perguntas
+            )
 
             print(f"\n💡 Assistente: {resposta['messages'][-1].content}\n")
             print("-" * 70 + "\n")
 
         except KeyboardInterrupt:
             print("\n\n👋 Encerrando assistente. Até logo!")
+            db.fechar()
             break
         except Exception as e:
             print(f"\n❌ Erro: {str(e)}\n")
+            import traceback
+            traceback.print_exc()
 
 
 # ========== EXEMPLOS DE USO ==========
@@ -368,10 +631,20 @@ def demonstrar_uso():
 
 
 if __name__ == "__main__":
-    # Descomente a linha que deseja executar:
+    import sys
 
-    # Modo interativo (padrão)
-    executar_assistente()
+    # Configuração de linha de comando
+    usar_finetuned = "--finetuned" in sys.argv or "-f" in sys.argv
+    modo_demo = "--demo" in sys.argv or "-d" in sys.argv
 
-    # Modo demonstração
-    # demonstrar_uso()
+    if modo_demo:
+        # Modo demonstração
+        demonstrar_uso()
+    else:
+        # Modo interativo (padrão)
+        print("\n🎛️  Opções de execução:")
+        print("  python main.py              → Usa Ollama local")
+        print("  python main.py --finetuned  → Usa modelo fine-tuned")
+        print("  python main.py --demo       → Modo demonstração\n")
+
+        executar_assistente(usar_modelo_finetuned=usar_finetuned)
