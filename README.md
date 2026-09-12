@@ -4,10 +4,12 @@ Sistema de assistente médico virtual desenvolvido com **LangChain**, capaz de a
 
 ## 📋 Requisitos Atendidos
 
-✅ **Pipeline com LangChain** que integra LLM customizada
-✅ **Consultas em base de dados estruturadas** (prontuários e registros)
+✅ **Pipeline com LangChain** que integra LLM customizada (fine-tuned Qwen3.5-4B)
+✅ **Consultas em base de dados estruturadas** (SQLite com prontuários e registros)
 ✅ **Contextualização de respostas** com informações atualizadas do paciente
-✅ **Preparado para integração** com modelo fine-tuned da Etapa 1
+✅ **Integração completa** com modelo fine-tuned da Etapa 1 (emidiosouza/assistente-maternidade)
+✅ **Memory persistente** para manter contexto entre perguntas
+✅ **Sistema de Tools** para consulta automática de dados
 
 ---
 
@@ -44,26 +46,30 @@ O sistema está **pronto para integração** com o modelo da Etapa 1:
 ### 1. **Instalação**
 
 ```bash
-# Clone ou acesse o diretório do projeto
-cd LangChain
-
 # Instale as dependências
 pip install -r requirements.txt
 
-# Configure as variáveis de ambiente
+# Configure as variáveis de ambiente (opcional)
 cp .env.example .env
-# Edite o .env com suas credenciais (se necessário)
+# Edite o .env se precisar usar OpenAI
 ```
 
 ### 2. **Execução**
 
 ```bash
-# Modo interativo (conversa com o assistente)
+# Modo 1: Usar Ollama local (rápido, gratuito)
 python main.py
 
-# Modo demonstração (executa exemplos automáticos)
-# Descomente a linha no final do main.py e execute
+# Modo 2: Usar modelo fine-tuned HuggingFace
+python main.py --finetuned
+
+# Modo 3: Demonstração automática
+python main.py --demo
 ```
+
+**Nota sobre modelos:**
+- **Ollama**: Requer instalação local ([ollama.ai](https://ollama.ai)) e `ollama pull llama3.2`
+- **Fine-tuned**: Baixa automaticamente de `emidiosouza/assistente-maternidade` (requer ~8GB RAM/VRAM)
 
 ### 3. **Exemplos de Perguntas**
 
@@ -78,33 +84,37 @@ python main.py
 
 ## 🔧 Integração com Modelo Fine-Tuned
 
-### **Passo 1: Escolha a Opção de Integração**
+### **Status: ✅ INTEGRADO**
 
-Consulte `INSTRUCOES_INTEGRACAO.md` para ver as 3 opções:
-
-1. **Ollama** (recomendado para modelos locais)
-2. **HuggingFace** (flexível para qualquer modelo)
-3. **API Customizada** (melhor performance em produção)
-
-### **Passo 2: Modifique a Função**
-
-No arquivo `main.py`, localize a função `criar_llm_finetuned()` (linha ~34) e substitua conforme o exemplo da opção escolhida.
-
-**Exemplo com Ollama:**
-
-```python
-def criar_llm_finetuned():
-    from langchain_community.llms import Ollama
-    return Ollama(
-        model="assistente-medico",  # Seu modelo fine-tuned
-        temperature=0.3
-    )
-```
-
-### **Passo 3: Teste**
+O modelo fine-tuned já está integrado e pode ser usado executando:
 
 ```bash
-python main.py
+python main.py --finetuned
+```
+
+**Modelo usado:** `emidiosouza/assistente-maternidade`
+- Baseado em Qwen3.5-4B
+- Fine-tuned com QLoRA no dataset MedPT
+- Especializado em atendimento materno-infantil
+- Adapter LoRA disponível no HuggingFace
+
+### **Arquitetura da Integração**
+
+```
+Pergunta do Médico
+    ↓
+[1] LangChain Agent (decide quais tools usar)
+    ↓
+[2] Tools consultam SQLite
+    • buscar_prontuario()
+    • verificar_exames_pendentes()
+    • consultar_protocolo()
+    ↓
+[3] Contexto é montado com dados do BD
+    ↓
+[4] LLM Fine-tuned processa pergunta + contexto
+    ↓
+[5] Resposta contextualizada com dados do paciente
 ```
 
 ---
@@ -112,75 +122,141 @@ python main.py
 ## 📁 Estrutura do Projeto
 
 ```
-LangChain/
-├── main.py                      # Código principal do assistente
+TechV3/
+├── main.py                      # Código principal do assistente (COMPLETO)
 ├── requirements.txt             # Dependências do projeto
+├── hospital.db                  # Base de dados SQLite (criado automaticamente)
 ├── .env.example                 # Exemplo de variáveis de ambiente
-├── INSTRUCOES_INTEGRACAO.md     # Guia de integração com modelo fine-tuned
-└── README.md                    # Este arquivo
+├── INSTRUCOES_INTEGRACAO.md     # Guia de integração (referência)
+├── README.md                    # Este arquivo
+├── notebooks/                   # Notebooks da Etapa 1 (fine-tuning)
+│   ├── 05_treino.ipynb          # Fine-tuning do modelo
+│   └── 06_avaliacao.ipynb       # Avaliação do modelo
+└── modelos/                     # Modelos treinados (local)
+    └── lora_model/              # Adapter LoRA (se treinado localmente)
 ```
 
 ---
 
 ## 🏗️ Arquitetura Técnica
 
-### **1. Pipeline LangChain**
+**📊 [Ver Diagrama Completo e Interativo](DIAGRAMA_FLUXO.md)** ← Diagramas Mermaid + Fluxo detalhado
+
+### **1. Pipeline LangChain Completo**
 
 ```
 Pergunta do Médico
     ↓
-Agent LangChain (decide o que fazer)
+┌─────────────────────────────────┐
+│ LangChain Agent (ReAct)         │
+│ + MemorySaver (contexto)        │
+└─────────────────────────────────┘
     ↓
-Tools (busca dados necessários)
+┌─────────────────────────────────┐
+│ Tools (consulta BD estruturado) │
+│ • buscar_prontuario()           │
+│ • verificar_exames_pendentes()  │
+│ • consultar_protocolo()         │
+│ • registrar_alerta_equipe()     │
+└─────────────────────────────────┘
     ↓
-LLM Fine-Tuned (processa e raciocina)
+┌─────────────────────────────────┐
+│ SQLite Database                 │
+│ • Tabela: pacientes             │
+│ • Tabela: diagnosticos          │
+│ • Tabela: medicamentos          │
+│ • Tabela: exames                │
+│ • Tabela: protocolos            │
+└─────────────────────────────────┘
+    ↓
+[Contexto montado com dados atualizados]
+    ↓
+┌─────────────────────────────────┐
+│ LLM Fine-tuned                  │
+│ (Qwen3.5-4B + LoRA)             │
+│ Treinado no MedPT               │
+└─────────────────────────────────┘
     ↓
 Resposta Contextualizada
 ```
 
 ### **2. Componentes Principais**
 
-- **LLM**: Modelo de linguagem (OpenAI temporário → Fine-tuned)
-- **Agent**: Sistema de decisão automática do LangChain
-- **Tools**: Ferramentas para acessar dados (prontuários, protocolos, etc.)
-- **Memory**: Mantém contexto da conversa
-- **Prompt System**: Define comportamento e diretrizes do assistente
+- **LLM Fine-tuned**: Qwen3.5-4B especializado em atendimento materno-infantil
+- **LangChain Agent (ReAct)**: Sistema de decisão automática com raciocínio
+- **SQLite Database**: Base estruturada com prontuários, exames e protocolos
+- **Tools**: 4 ferramentas para consulta e registro de dados
+- **MemorySaver**: Mantém contexto persistente entre perguntas
+- **Prompt System**: Diretrizes clínicas e limitações do assistente
 
-### **3. Fluxo de Decisão**
+### **3. Fluxo de Contextualização**
 
-1. Médico faz pergunta
-2. Agent analisa a pergunta
-3. Agent decide quais tools usar
-4. Tools buscam dados relevantes
-5. LLM recebe pergunta + contexto dos tools
-6. LLM gera resposta baseada em protocolos
-7. Resposta é retornada ao médico
+1. **Entrada**: Médico pergunta sobre paciente X
+2. **Agent**: Identifica necessidade de buscar prontuário
+3. **Tool**: `buscar_prontuario(X)` consulta SQLite
+4. **Contexto**: Retorna diagnósticos, medicamentos, alergias
+5. **LLM**: Recebe pergunta + contexto estruturado
+6. **Processamento**: Fine-tuned raciocina sobre dados reais
+7. **Saída**: Resposta contextualizada com dados do paciente
 
 ---
 
-## 📊 Dados de Exemplo
+## 📊 Base de Dados Estruturada
 
-O sistema inclui dados simulados para teste:
+O sistema usa **SQLite** com schema completo:
 
-- **2 pacientes** com prontuários completos
-- **Exames pendentes** para ambos
-- **2 protocolos médicos** (hipertensão e diabetes)
+### **Tabelas criadas automaticamente:**
 
-**Em produção**, substitua pela conexão real:
+```sql
+-- Pacientes
+CREATE TABLE pacientes (
+    id TEXT PRIMARY KEY,
+    nome TEXT, idade INTEGER, sexo TEXT,
+    alergias TEXT, ultimo_atendimento TEXT
+);
+
+-- Diagnósticos (relação 1:N com pacientes)
+CREATE TABLE diagnosticos (
+    id INTEGER PRIMARY KEY, paciente_id TEXT,
+    diagnostico TEXT, data_diagnostico TEXT
+);
+
+-- Medicamentos (relação 1:N com pacientes)
+CREATE TABLE medicamentos (
+    id INTEGER PRIMARY KEY, paciente_id TEXT,
+    medicamento TEXT, dosagem TEXT, data_inicio TEXT
+);
+
+-- Exames (relação 1:N com pacientes)
+CREATE TABLE exames (
+    id INTEGER PRIMARY KEY, paciente_id TEXT,
+    tipo_exame TEXT, status TEXT,
+    data_solicitacao TEXT, data_realizacao TEXT
+);
+
+-- Protocolos médicos
+CREATE TABLE protocolos (
+    id INTEGER PRIMARY KEY,
+    condicao TEXT UNIQUE, descricao TEXT, condutas TEXT
+);
+```
+
+### **Dados de exemplo inclusos:**
+- 2 pacientes com histórico completo
+- 3 diagnósticos associados
+- 3 medicamentos em uso
+- 3 exames pendentes
+- 2 protocolos (hipertensão e diabetes)
+
+**Para produção**, migrar para PostgreSQL:
 
 ```python
-# No arquivo main.py, classe DatabaseProntuarios
-# Substituir por:
-import psycopg2  # ou outro driver de banco
-
-class DatabaseProntuarios:
-    def __init__(self):
-        self.conn = psycopg2.connect(
-            host="seu_host",
-            database="hospital_db",
-            user="usuario",
-            password="senha"
-        )
+# Substituir na linha 114 do main.py:
+import psycopg2
+self.conn = psycopg2.connect(
+    host="seu_host", database="hospital_db",
+    user="usuario", password="senha"
+)
 ```
 
 ---
