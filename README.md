@@ -1,66 +1,41 @@
-# Assistente Clínico — estado atual
+# Assistente Clínico Materno-Infantil — demonstração LangGraph
 
-Projeto acadêmico de assistente clínico materno-infantil. O repositório contém um protótipo LangChain/SQLite e notebooks de preparação, fine-tuning e avaliação.
+MVP acadêmico com dados inteiramente sintéticos. O caminho demonstrado é um `StateGraph` controlado: autorização antes de qualquer leitura identificável, fontes rastreáveis, criticidade determinística, alerta **simulado** persistido e validação antes da exibição.
 
-## O que está implementado
+Não é um sistema hospitalar, não aceita dados reais, não prescreve e não notifica equipes reais.
 
-- SQLite demonstrativo com prontuários, exames e protocolos.
-- Quatro funções decoradas como tools: consulta de prontuário, exames, protocolos e alerta de terminal.
-- Agente ReAct com `MemorySaver` em processo, usando Ollama por padrão.
-- Pipeline de preparação de dados, treino QLoRA de Qwen3.5-4B e avaliação do adapter nos notebooks.
+## Instalação e testes
 
-## Limites importantes
-
-- O modelo fine-tuned **não está integrado ao runtime**. A opção `python main.py --finetuned` carrega, hoje, o modelo base `Qwen/Qwen2.5-1.5B-Instruct` apenas como demonstração; ela não carrega o adapter Qwen3.5-4B treinado.
-- O pipeline de treino demonstra mensagens de resposta final e não demonstra suporte a chamadas de tools, JSON de tools ou decisões de roteamento. Portanto, não trate o modelo fine-tuned como router ou modelo de tool calling sem dados, capacidades e testes específicos que comprovem esse suporte.
-- O ReAct atual decide as tools livremente. Ele não é um fluxo de domínio seguro: não há autorização antes de ler prontuário, validação determinística da resposta, fontes rastreáveis ou auditoria persistida.
-- O alerta atual apenas imprime uma mensagem no terminal; não notifica uma equipe nem persiste um evento.
-- `MemorySaver` mantém memória somente durante o processo atual.
-
-O plano para corrigir esses limites está em [docs/design-doc-langgraph.md](docs/design-doc-langgraph.md). Ele é uma proposta, não uma implementação concluída.
-
-## Execução do protótipo
+`pyproject.toml` e `uv.lock` são as fontes de verdade de dependências.
 
 ```bash
-pip install -r requirements.txt
-python main.py
+uv sync --group dev
+uv run pytest
 ```
 
-O modo padrão requer Ollama e `llama3.2`. O comando abaixo serve exclusivamente para inspecionar o pipeline textual de demonstração, não para demonstrar o modelo treinado:
+## Demonstração local
+
+O modo fake exercita todo o grafo sem rede ou modelo pesado:
 
 ```bash
-python main.py --finetuned
+uv run python -m app.cli --fake --authorized-patient P-042 "Paciente P-042 com hipertensão gestacional tem exames pendentes?"
 ```
 
-## Verificação local
+Em uso normal, o CLI exige `OPENAI_API_KEY` para `gpt-4.1-mini` e `QWEN_LORA_ADAPTER_PATH` para o adapter LoRA de Qwen3.5-4B. Não há fallback para modelo-base.
 
 ```bash
-python testar_pipeline.py
+uv run python -m app.cli --smoke-general-llm
+uv run python -m app.cli --smoke-final-answer-llm
 ```
 
-O script verifica imports, SQLite e as três tools de leitura. Ele não inicia um LLM nem valida a integração do adapter.
+Os smoke tests acessam integrações reais e são separados da suíte determinística. A memória é apenas do processo e nunca amplia a autorização do `RequestContext`.
 
-## Arquitetura alvo
+## Garantias demonstradas
 
-```text
-pergunta + RequestContext
-        |
-router determinístico / StateGraph
-        |
-autorização -> consultas -> validação -> fontes/auditoria
-        |
-modelo fine-tuned (somente geração da resposta final)
-```
+- O modelo geral só interpreta, analisa e critica saídas estruturadas; não escolhe ferramentas nem decisões de segurança.
+- O adapter fine-tuned só gera o texto final após recuperação autorizada.
+- Fontes `[S#]` são validadas contra fontes efetivamente recuperadas.
+- Dose, posologia, prescrição e ajuste autônomo são bloqueados por regras explícitas.
+- Casos críticos exigem escalonamento humano; com paciente autorizado, um alerta simulado idempotente é registrado antes da resposta.
 
-O modelo não define autorização, IDs de pacientes ou tools a executar. Essas decisões devem ser determinísticas e testáveis.
-
-## Dados e segurança
-
-Os dados do SQLite são apenas demonstrativos e não representam integração hospitalar. Não use o protótipo com dados reais. Para uma implementação clínica, são necessários autorização, minimização de dados, logs persistentes e validação antes da entrega da resposta.
-
-## Estrutura relevante
-
-- [main.py](main.py): protótipo atual LangChain/SQLite.
-- [notebooks/05_treino.ipynb](notebooks/05_treino.ipynb): treino do adapter LoRA.
-- [notebooks/06_avaliacao.ipynb](notebooks/06_avaliacao.ipynb): avaliação do adapter.
-- [docs/design-doc-langgraph.md](docs/design-doc-langgraph.md): arquitetura alvo, workflow e plano de implementação.
+O validador é um controle demonstrável, não uma garantia de validação semântica absoluta de texto livre. Detalhes de arquitetura estão em [docs/design-doc-langgraph.md](docs/design-doc-langgraph.md) e o contrato em [docs/langgraph-backend-contract.md](docs/langgraph-backend-contract.md).
