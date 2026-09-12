@@ -2,9 +2,9 @@
 Sistema de Assistente Médico Virtual usando LangChain
 Tech Challenge - Etapa 2: Criação de assistente médico com LangChain
 
-IMPORTANTE: O adapter fine-tuned ainda não está integrado a este runtime.
-O modo --finetuned mantém o nome legado, mas carrega um modelo base apenas para
-demonstrar o pipeline textual.
+LEGADO: este arquivo mantém o protótipo ReAct da etapa anterior. A demonstração
+controlada usa `python -m app.cli`; o adapter LoRA real só é carregado por
+`app.llm.factory.QwenLoraFinalAnswerLLM`.
 """
 
 from langchain_openai import ChatOpenAI
@@ -57,13 +57,12 @@ def criar_llm_local():
 
 
 # OPÇÃO 3: Usar modelo base compatível para demonstração
-def criar_llm_finetuned():
+def criar_llm_base_legado():
     """
-    Usa modelo base Qwen para demonstração do pipeline LangChain.
+    Usa modelo base Qwen apenas para o protótipo legado ReAct.
 
-    NOTA: O adapter fine-tuned está nos notebooks 05_treino.ipynb e 06_avaliacao.ipynb,
-    mas não é carregado por esta função.
-    Para o vídeo, demonstramos o pipeline LangChain funcionando com modelo base.
+    Não representa o adapter fine-tuned e não deve ser usado como evidência de
+    integração do modelo treinado.
     """
     from langchain_community.llms import HuggingFacePipeline
     from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
@@ -451,7 +450,7 @@ Status: Enviado para equipe médica
 
 # ========== CONFIGURAÇÃO DO ASSISTENTE ==========
 
-def criar_assistente_medico(usar_modelo_finetuned: bool = False):
+def criar_assistente_medico(usar_modelo_base_legado: bool = False):
     """
     Cria o assistente médico virtual com LangChain.
     Pipeline completo com:
@@ -461,14 +460,14 @@ def criar_assistente_medico(usar_modelo_finetuned: bool = False):
     - Sistema de contextualização de respostas
 
     Args:
-        usar_modelo_finetuned: Nome legado. Se True, usa o modelo base de demonstração;
+        usar_modelo_base_legado: Se True, usa o modelo base de demonstração;
             se False, usa Ollama local.
     """
 
     # Escolha do modelo
-    if usar_modelo_finetuned:
+    if usar_modelo_base_legado:
         print("\n🔬 Usando modelo base para demonstração (não é o adapter fine-tuned)...")
-        llm = criar_llm_finetuned()
+        llm = criar_llm_base_legado()
     else:
         print("\n🤖 Usando modelo local via Ollama...")
         llm = criar_llm_local()
@@ -533,13 +532,13 @@ LIMITAÇÕES:
 
 # ========== INTERFACE DE USO ==========
 
-def executar_assistente(usar_modelo_finetuned: bool = False):
+def executar_assistente(usar_modelo_base_legado: bool = False):
     """
     Função principal para executar o assistente médico.
     Pipeline completo com consulta em base de dados estruturada e contextualização.
 
     Args:
-        usar_modelo_finetuned: Nome legado. Se True, usa o modelo base de demonstração;
+        usar_modelo_base_legado: Se True, usa o modelo base de demonstração;
             se False, usa Ollama.
     """
     print("="*70)
@@ -551,7 +550,7 @@ def executar_assistente(usar_modelo_finetuned: bool = False):
     print("  ✓ Memory para contexto persistente")
     print("  ✓ Sistema de contextualização de respostas")
 
-    assistente = criar_assistente_medico(usar_modelo_finetuned)
+    assistente = criar_assistente_medico(usar_modelo_base_legado)
 
     print("\n✅ Assistente inicializado com sucesso!")
     print("\n🔧 Ferramentas disponíveis:")
@@ -649,7 +648,7 @@ if __name__ == "__main__":
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
     # Configuração de linha de comando
-    usar_finetuned = "--finetuned" in sys.argv or "-f" in sys.argv
+    usar_modelo_base_legado = "--base-legacy" in sys.argv
     modo_demo = "--demo" in sys.argv or "-d" in sys.argv
 
     if modo_demo:
@@ -659,7 +658,8 @@ if __name__ == "__main__":
         # Modo interativo (padrão)
         print("\n🎛️  Opções de execução:")
         print("  python main.py              → Usa Ollama local")
-        print("  python main.py --finetuned  → Usa modelo base Qwen para demonstração")
+        print("  python main.py --base-legacy → Usa modelo base Qwen no protótipo legado")
+        print("  python -m app.cli            → Usa o workflow LangGraph controlado")
         print("  python main.py --demo       → Modo demonstração\n")
 
-        executar_assistente(usar_modelo_finetuned=usar_finetuned)
+        executar_assistente(usar_modelo_base_legado=usar_modelo_base_legado)
