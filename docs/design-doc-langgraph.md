@@ -10,7 +10,7 @@
 
 ## 1. Resumo
 
-Este documento substitui a orquestração implícita do agente ReAct por um `StateGraph` de domínio. O grafo controla, em ordem verificável, interpretação determinística, autorização, recuperação de contexto, análise, criticidade, alerta simulado, geração, validação, fontes e auditoria.
+Este documento substitui a orquestração implícita do agente ReAct por um `StateGraph` de domínio. O grafo controla, em ordem verificável, interpretação estruturada, autorização, recuperação de contexto, análise, criticidade, alerta simulado, geração, validação, fontes e auditoria.
 
 O objetivo é atender à Fase 3 com uma demonstração local, modular e testável. Não é um sistema hospitalar de produção, não processa dados reais e não notifica equipes reais.
 
@@ -27,6 +27,7 @@ O adapter Qwen3.5-4B + LoRA foi treinado e avaliado nos notebooks, mas ainda nã
 - Usar dados, protocolos e pacientes sintéticos coerentes com gestação, puerpério ou bebês até um ano.
 - Contextualizar respostas com dados recuperados e fontes rastreáveis.
 - Aplicar regras determinísticas de criticidade, alertas simulados idempotentes e validação antes de exibir qualquer resposta.
+- Usar `general_llm` para interpretação, análise estruturada, clarificação e crítica auxiliar, sem delegar controles de segurança a ele.
 - Integrar o adapter fine-tuned apenas para geração de resposta final, após smoke test de carregamento.
 - Produzir testes, README, relatório técnico e roteiro de vídeo compatíveis com a entrega.
 
@@ -68,7 +69,8 @@ CLI (`python -m app.cli`)
 pergunta + RequestContext sintético
        |
 StateGraph
-  |-- nós e rotas determinísticos
+  |-- rotas e controles determinísticos
+  |-- general_llm (GPT-4.1 mini) para interpretação e análise estruturada
   |-- adapter Qwen + LoRA apenas na resposta final
        |
 serviços Python injetáveis
@@ -95,17 +97,17 @@ Ele não inclui FastAPI, SSE, autenticação corporativa, banco remoto, notifica
 | --- | --- |
 | `app/graph` | Estado, nós, rotas e compilação do `StateGraph`. |
 | `app/services` | Regras determinísticas, autorização, SQLite, alertas, auditoria e validação. |
-| `app/llm` | Carregamento e prompt do adapter final; contrato de geração. |
+| `app/llm` | Contratos, prompts e carregamento de `general_llm` e do adapter final. |
 | `app/cli.py` | Contexto demo, entrada, exibição segura e evidências da execução. |
 | `tests/` | Unitários com fakes e integração com SQLite sintético. |
 
 As tools LangChain existentes podem ser adaptadores finos de serviços, mas não são a autoridade do fluxo. O ReAct em `main.py` permanece legado até a demonstração do novo CLI passar.
 
-As assinaturas, modelos Pydantic, responsabilidades, erros e checklist de handoff entre o grafo e essas dependências estão definidos em [langgraph-backend-contract.md](langgraph-backend-contract.md). O StateGraph depende somente dessas portas, permitindo testar suas rotas com fakes antes da integração com SQLite ou o adapter real.
+As assinaturas, modelos Pydantic, responsabilidades, erros e checklist de handoff entre o grafo e essas dependências estão definidos em [langgraph-backend-contract.md](langgraph-backend-contract.md). O contrato deve incluir a porta de `general_llm`, além da já existente `FinalAnswerLLM`. O StateGraph depende somente dessas portas, permitindo testar suas rotas com fakes antes da integração com SQLite, `general_llm` ou o adapter real.
 
 ## 7. Estado e contratos
 
-O estado contém mensagens, `RequestContext`, `audit_id`, pergunta original, paciente e condição normalizados, intenção, autorização, contexto recuperado, fontes, análise, criticidade, alerta, rascunho, resposta final, resultado da validação, violações, contador de revisão e código de erro.
+O estado contém mensagens, `RequestContext`, `audit_id`, pergunta original, paciente e condição normalizados, intenção, autorização, contexto recuperado, fontes, análise, criticidade, alerta, rascunho, resposta final, resultado da crítica auxiliar, resultado da validação, violações, contador de revisão e código de erro.
 
 `audit_id`, pergunta original, `RequestContext` e versões de regras/protocolos são imutáveis depois de `inicializar_execucao`. Cada nó retorna somente o fragmento de estado que possui. `messages` usa `add_messages`; fontes são deduplicadas por `id`.
 
@@ -132,9 +134,30 @@ Os nós são:
 7. `analisar_informacoes`
 8. `registrar_alerta_simulado`
 9. `gerar_resposta`
-10. `validar_seguranca`
+10. `criticar_resposta`
+11. `validar_seguranca`
 
-`interpretar_pergunta` usa parsing determinístico: extrai ID em formato aceito e normaliza condição contra o catálogo de protocolos. Dúvida, conflito ou ausência de ambos os campos resulta em clarificação. O MVP não depende de uma `general_llm`; uma interface para análise estruturada por LLM poderá ser adicionada futuramente sem conceder autoridade de segurança a ela.
+O workflow possui duas dependências de LLM, injetadas por papel e nunca escolhidas livremente por um nó:
+
+| Dependência | Modelo | Nós permitidos | Limites |
+| --- | --- | --- | --- |
+| `general_llm` | OpenAI `gpt-4.1-mini` | `interpretar_pergunta`, `analisar_informacoes`, clarificação e `criticar_resposta` | Retorna saída estruturada validada; não chama tools, não acessa dados e não toma decisões de segurança. |
+| `final_answer_llm` | Qwen3.5-4B + adapter LoRA fine-tuned | Somente `gerar_resposta` | Redige a resposta final somente a partir de fatos autorizados e fontes recuperadas. |
+
+`interpretar_pergunta` usa `general_llm` para propor intenção, condição e referências ao paciente em formato estruturado. O ID precisa corresponder ao formato aceito e é validado deterministicamente; a condição é normalizada contra o catálogo de protocolos. Dúvida, conflito ou ausência de campos mínimos resulta em clarificação, sem consulta clínica. A LLM não pode inventar identificadores, ampliar permissões ou decidir rotas de negócio.
+
+Uso de LLM por nó:
+
+| Nó | Uso de LLM | Autoridade final |
+| --- | --- | --- |
+| `inicializar_execucao` | Não usa LLM. | Código. |
+| `interpretar_pergunta` | `general_llm` propõe campos estruturados. | Validador determinístico e catálogo de protocolos. |
+| `autorizar_acesso`, `buscar_prontuario`, `verificar_exames`, `consultar_protocolo` | Não usam LLM. | Serviços Python. |
+| `analisar_informacoes` | `general_llm` sintetiza achados estruturados a partir do contexto autorizado. | Dados recuperados e regras determinísticas. |
+| `registrar_alerta_simulado` | Não usa LLM. | Serviço de criticidade e alerta. |
+| `gerar_resposta` | Exclusivamente `final_answer_llm`. | Validador de segurança e fontes. |
+| `criticar_resposta` | `general_llm` retorna crítica estruturada de coerência, citações e linguagem indevida. | Não aprova, bloqueia, nem inicia revisão. |
+| `validar_seguranca` | Não usa LLM; recebe a crítica como evidência auxiliar. | Validador determinístico. |
 
 ~~~mermaid
 flowchart TD
@@ -155,36 +178,90 @@ flowchart TD
   critical -->|sim e paciente| alert[registrar_alerta_simulado] --> answer[gerar_resposta]
   critical -->|sim sem paciente| escalation[resposta de escalonamento]
   critical -->|não| answer
-  answer --> safety[validar_seguranca]
+  answer --> critic[criticar_resposta]
+  critic --> safety[validar_seguranca]
   limited --> safety
   clarify --> safety
   escalation --> safety
   safety -->|aprovada| END
-  safety -->|uma revisão| answer
-  safety -->|bloqueada| blocked[mensagem segura de bloqueio] --> END
+  safety -->|revisão e contador = 0| revise[incrementar contador de revisão] --> answer
+  safety -->|bloqueada ou contador = 1| blocked[mensagem segura de bloqueio] --> END
 ~~~
 
 Regras de roteamento:
 
-- Sem paciente e sem condição: clarificar sem consulta e sem LLM.
+- Sem paciente e sem condição: clarificar sem consulta clínica; `general_llm` pode ajudar a formular o pedido de dados mínimos.
 - Condição sem paciente: recuperar somente protocolo e responder de forma geral.
 - Paciente sem condição: recuperar prontuário e exames autorizados; não consultar protocolo nulo.
 - Paciente e condição: recuperar prontuário, exames e protocolo autorizados/aplicáveis.
 - Acesso negado: nunca chamar repositório clínico.
 - Criticidade sem paciente: escalonar, sem alerta de paciente.
 - Criticidade com paciente: persistir alerta simulado antes da resposta.
+- `gerar_resposta` sempre segue para `criticar_resposta` e então para `validar_seguranca`; a crítica é auditável e não toma decisão de rota.
+- Uma revisão só é permitida quando `contador_de_revisão == 0`: o grafo incrementa o contador, fornece as violações determinísticas para `gerar_resposta` e repete o ciclo. Com `contador_de_revisão == 1`, toda nova reprovação segue para a mensagem segura de bloqueio. Assim, há no máximo duas gerações por execução.
+
+### 8.1 Exemplos de execução
+
+Os exemplos mostram o caminho completo desde a mensagem até a saída validada. `general_llm` é OpenAI `gpt-4.1-mini`; `final_answer_llm` é Qwen3.5-4B + adapter LoRA.
+
+#### Paciente autorizado e caso crítico
+
+~~~mermaid
+flowchart TD
+  user[Mensagem: Paciente P-042 com hipertensão gestacional tem exames pendentes?]
+  interpret[interpretar_pergunta\n general_llm]
+  auth[autorizar_acesso\n determinístico]
+  record[buscar_prontuario\n serviço]
+  exams[verificar_exames\n serviço]
+  protocol[consultar_protocolo\n serviço]
+  analysis[analisar_informacoes\n general_llm]
+  critical{regra de criticidade\n determinística}
+  alert[registrar_alerta_simulado\n serviço idempotente]
+  answer[gerar_resposta\n final_answer_llm]
+  critic[criticar_resposta\n general_llm]
+  safety[validar_seguranca\n determinístico]
+  final[Resposta final validada\n fontes e alerta simulado]
+
+  user --> interpret --> auth -->|autorizado| record --> exams --> protocol --> analysis --> critical
+  critical -->|crítico| alert --> answer --> critic --> safety -->|aprovada| final
+  safety -->|revisão e contador = 0| answer
+  safety -->|bloqueada ou contador = 1| blocked[mensagem segura de bloqueio]
+~~~
+
+#### Pergunta geral, sem identificação de paciente
+
+~~~mermaid
+flowchart TD
+  user[Mensagem: Quais sinais exigem atenção na hipertensão gestacional?]
+  interpret[interpretar_pergunta\n general_llm]
+  patient{paciente identificado?\n determinístico}
+  protocol[consultar_protocolo\n serviço]
+  analysis[analisar_informacoes\n general_llm]
+  critical{regra de criticidade\n determinística}
+  answer[gerar_resposta\n final_answer_llm]
+  critic[criticar_resposta\n general_llm]
+  safety[validar_seguranca\n determinístico]
+  final[Resposta geral validada\n fontes do protocolo]
+
+  user --> interpret --> patient -->|não| protocol --> analysis --> critical
+  critical -->|sem criticidade individual| answer --> critic --> safety -->|aprovada| final
+  safety -->|revisão e contador = 0| answer
+  safety -->|bloqueada ou contador = 1| blocked[mensagem segura de bloqueio]
+~~~
 
 ## 9. LLM e geração final
 
-O adapter Qwen3.5-4B + LoRA é a única LLM obrigatória do MVP e é injetado exclusivamente em `gerar_resposta`. Antes de uma execução clínica normal, o CLI executa smoke test que comprova carregar o adapter correto e registra sua versão no audit log.
+`general_llm` é OpenAI `gpt-4.1-mini` e é obrigatório nos nós permitidos na seção anterior. Ele recebe apenas a pergunta ou dados já autorizados e delimitados, devolve saída estruturada conforme schema e suas falhas, recusas ou respostas inválidas encerram a etapa em clarificação ou limitação segura. Em `criticar_resposta`, devolve violações candidatas e justificativas associadas a fontes; não aprova, bloqueia ou repete o fluxo. Não há fallback que transforme um modelo textual em autoridade de acesso, criticidade ou validação.
+
+`final_answer_llm` é o adapter Qwen3.5-4B + LoRA e é injetado exclusivamente em `gerar_resposta`. Antes de uma execução clínica normal, o CLI executa smoke test que comprova carregar o adapter correto e registra sua versão no audit log.
 
 Não há fallback silencioso para modelo-base. Se o adapter não estiver disponível, o fluxo encerra com erro seguro e auditado. A opção legada `--finetuned` deve ser removida ou renomeada para não alegar carregar o adapter.
 
-O prompt final contém apenas pergunta, fatos autorizados, fontes enumeradas e limites de resposta. O modelo não recebe poderes para escolher tools, pacientes ou rotas. A geração é acumulada por completo; nenhum token de rascunho é exibido antes de `validar_seguranca` aprová-lo.
+O prompt final contém apenas pergunta, fatos autorizados, fontes enumeradas e limites de resposta. Nenhuma LLM recebe poderes para escolher tools, pacientes ou rotas. A geração é acumulada por completo; nenhum token de rascunho é exibido antes de `validar_seguranca` aprová-lo.
 
 ## 10. Segurança e validação
 
-O validador determinístico é a autoridade final. Ele:
+O validador determinístico é a autoridade final. Ele recebe a saída de `criticar_resposta` como evidência auxiliar de coerência clínica, citações e recomendações indevidas, mas uma crítica favorável nunca aprova uma resposta sozinha. O validador:
 
 - exige fontes citadas existentes no estado;
 - bloqueia resposta individual sem contexto autorizado suficiente;
@@ -198,11 +275,11 @@ O validador oferece controles demonstráveis, não garantia de validação semâ
 
 ## 11. Criticidade, alertas e auditoria
 
-Criticidade vem de regras Python pequenas, versionadas e associadas a fixtures sintéticas. A LLM não determina nem dispara alertas.
+Criticidade vem de regras Python pequenas, versionadas e associadas a fixtures sintéticas. `general_llm` pode sintetizar achados que serão considerados pelas regras, mas não determina criticidade nem dispara alertas.
 
 `alerts` armazena `audit_id`, paciente opcional, motivo/código de regra, versão da regra, timestamp e chave de idempotência única. O alerta é sempre chamado de **simulado registrado**, nunca de alerta enviado/notificado para equipe. Se sua persistência falhar, o workflow não entrega resposta clínica normal: audita a falha e retorna limitação segura.
 
-`audit_events` registra `audit_id`, início/fim de nó, rota, duração, IDs de fontes, versão de protocolo/regra, resultado de validação, alerta e código de erro. Não registra prontuário integral, prompts completos, chaves ou texto clínico desnecessário.
+`audit_events` registra `audit_id`, início/fim de nó, rota, duração, IDs de fontes, versão de protocolo/regra, resultado resumido da crítica auxiliar, resultado de validação, alerta e código de erro. Não registra prontuário integral, prompts completos, chaves ou texto clínico desnecessário.
 
 SQLite é suficiente para fixtures, alertas e auditoria da demonstração. Filas, outbox distribuído, alertas externos e observabilidade operacional são evoluções fora de escopo.
 
@@ -214,7 +291,7 @@ Protocolos e regras de criticidade possuem versão. Cada fonte tem ID estável; 
 
 ## 13. Falhas, memória e API futura
 
-Falha de parsing, repositório, carregamento do adapter ou validação encerra o fluxo sem novas consultas e produz mensagem segura/auditada. Consultas de leitura podem ser repetidas com segurança; efeitos de alerta usam idempotência e não devem receber retry automático cego.
+Falha de parsing, de `general_llm`, de repositório, de carregamento do adapter ou de validação encerra o fluxo sem novas consultas e produz mensagem segura/auditada. Consultas de leitura podem ser repetidas com segurança; efeitos de alerta usam idempotência e não devem receber retry automático cego.
 
 `MemorySaver` mantém contexto somente durante o processo e não concede autorização. O CLI gera ou recebe um `conversation_id` de demonstração; reiniciar o processo perde contexto, limitação que deve ser exibida na documentação.
 
@@ -239,7 +316,7 @@ docs/
 
 ## 15. Testes e evidências
 
-Testes unitários usam serviços e LLMs falsas determinísticas. O adapter real aparece somente em smoke test separado. O aceite deve cobrir:
+Testes unitários usam serviços e LLMs falsas determinísticas. As integrações reais de `general_llm` e do adapter final aparecem somente em smoke tests separados. O aceite deve cobrir:
 
 | Caso | Resultado esperado |
 | --- | --- |
@@ -263,10 +340,10 @@ Testes unitários usam serviços e LLMs falsas determinísticas. O adapter real 
 1. Congelar SHA, alinhar README e dependências.
 2. Acordar e versionar o contrato em [langgraph-backend-contract.md](langgraph-backend-contract.md).
 3. Criar o backend local de referência: serviços injetáveis, schema SQLite, fixtures sintéticas, `alerts` e `audit_events`.
-4. Implementar estado, rotas e nós determinísticos do `StateGraph` com fakes das portas.
+4. Implementar estado, rotas e nós do `StateGraph`, incluindo as portas e fakes de `general_llm`, com controles determinísticos de segurança.
 5. Implementar fontes, criticidade, alerta idempotente e validador.
-6. Integrar adapter Qwen3.5-4B + LoRA exclusivamente em `gerar_resposta`; remover alegação incorreta de `--finetuned`.
-7. Criar testes unitários/integração e smoke test do adapter.
+6. Integrar `general_llm=OpenAI gpt-4.1-mini` somente nos nós permitidos e o adapter Qwen3.5-4B + LoRA exclusivamente em `gerar_resposta`; remover alegação incorreta de `--finetuned`.
+7. Criar testes unitários/integração, com fakes das duas LLMs, e smoke tests de cada integração real.
 8. Atualizar README, relatório técnico e roteiro de vídeo.
 9. Implementar FastAPI/SSE somente se sobrar tempo após a validação do núcleo.
 
@@ -283,4 +360,5 @@ Testes unitários usam serviços e LLMs falsas determinísticas. O adapter real 
 - O StateGraph possui testes de integração contra o backend local SQLite de referência, além dos testes unitários com fakes.
 - Testes de rotas, acesso, fontes, falhas, criticidade e validação passam sem API externa.
 - O adapter fine-tuned correto é carregado e demonstrado apenas como gerador final.
+- O `general_llm` é usado apenas para interpretação, análise estruturada, clarificação e crítica auxiliar, sem substituir decisões determinísticas.
 - README, relatório e vídeo mostram arquitetura, limites, logs, fontes e evidências exigidas pela Fase 3.
