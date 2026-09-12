@@ -65,7 +65,7 @@ print("\n3️⃣  Testando carregamento do modelo...")
 print("   ⏭️  Pulando teste de modelo (requer download/Ollama)")
 print("   ℹ️  Para testar modelo:")
 print("      - Com Ollama: python main.py")
-print("      - Com fine-tuned: python main.py --finetuned")
+print("      - Com modelo base de demonstração: python main.py --finetuned")
 
 # 4. Testar Tools
 print("\n4️⃣  Testando Tools do LangChain...")
@@ -111,10 +111,10 @@ print("   ✅ 4 Tools do LangChain funcionando")
 print("\n🎬 Sistema pronto para demonstração!")
 print("\n💡 Para executar:")
 print("   python main.py              → Ollama local")
-print("   python main.py --finetuned  → Modelo fine-tuned")
+print("   python main.py --finetuned  → Modelo base Qwen para demonstração (não carrega o adapter)")
 print("\n⚠️  Certifique-se de ter:")
-print("   - Ollama instalado (ollama pull llama3.2) OU")
-print("   - ~8GB RAM para modelo fine-tuned")
+print("   - Ollama instalado (ollama pull llama3.2), para o modo padrão, OU")
+print("   - memória suficiente para baixar e executar Qwen/Qwen2.5-1.5B-Instruct, para --finetuned")
 print("\n")
 
 # Fechar conexão
