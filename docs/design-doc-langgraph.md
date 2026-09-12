@@ -1,269 +1,234 @@
 # Design Doc — Workflow LangGraph do Assistente Clínico
 
-**Status:** Proposto
+**Status:** Aprovado para implementação
 
-**Base:** main em 5d9acf3, ou sucessor validado no início da implementação
+**Base:** `main` em `5d9acf3`, ou sucessor validado no início da implementação
 
-**Branch de implementação:** feat/langgraph-workflow
+**Branch de implementação:** `feat/langgraph-workflow`
 
-**Escopo:** Assistente clínico materno-infantil
+**Escopo:** demonstração de assistente clínico materno-infantil com dados sintéticos
 
 ## 1. Resumo
 
-Este documento propõe substituir a orquestração implícita do agente ReAct por um StateGraph próprio. O grafo torna visível e controlável a sequência de interpretação, autorização, recuperação de contexto, análise, alerta, geração e validação de respostas clínicas.
+Este documento substitui a orquestração implícita do agente ReAct por um `StateGraph` de domínio. O grafo controla, em ordem verificável, interpretação determinística, autorização, recuperação de contexto, análise, criticidade, alerta simulado, geração, validação, fontes e auditoria.
 
-A proposta atende ao entregável de fluxos LangGraph e reforça os requisitos de segurança, rastreabilidade, explicabilidade, modularização e demonstração da Fase 3.
+O objetivo é atender à Fase 3 com uma demonstração local, modular e testável. Não é um sistema hospitalar de produção, não processa dados reais e não notifica equipes reais.
 
-## 2. Contexto
+## 2. Contexto e fatos verificados
 
-A main já contém um assistente LangChain com quatro tools, SQLite, MemorySaver, documentação e scripts de demonstração. O agente ReAct decide quais tools chamar, porém a aplicação não controla de forma determinística:
+A implementação atual contém ReAct, quatro tools, SQLite e `MemorySaver`, mas não possui autorização antes de ler prontuários, validação determinística, fontes rastreáveis ou auditoria persistida. O banco atual contém exemplos genéricos fora do escopo materno-infantil e deve ser substituído antes da demonstração.
 
-- a autorização antes de recuperar prontuário;
-- quando exames e protocolos devem ser consultados;
-- o tratamento de perguntas incompletas;
-- o registro de criticidade e alertas;
-- a validação obrigatória da resposta;
-- a construção de fontes e trilha de auditoria.
-
-O desafio pede um assistente treinado com dados hospitalares, consultas a dados estruturados, respostas contextualizadas, limites clínicos, logging, fontes e fluxos LangGraph. O ReAct atual usa LangGraph internamente, mas não fornece um fluxo de domínio explícito suficiente para demonstrar esses controles.
+O adapter Qwen3.5-4B + LoRA foi treinado e avaliado nos notebooks, mas ainda não é carregado pelo runtime. A opção legada `main.py --finetuned` carrega `Qwen/Qwen2.5-1.5B-Instruct`, isto é, um modelo-base de demonstração, não o adapter treinado. Ela não pode ser usada como prova de integração do fine-tuning.
 
 ## 3. Objetivos
 
-- Implementar um StateGraph compilado e usado pelo CLI e, futuramente, pela API.
-- Recuperar prontuário, exames e protocolos somente quando necessários e permitidos.
-- Validar autorização antes de qualquer consulta de dado identificável.
-- Classificar criticidade com regras determinísticas e análise estruturada.
-- Registrar alertas de demonstração de modo auditável e idempotente.
-- Entregar apenas respostas validadas, com fontes realmente recuperadas.
-- Manter a LLM, os serviços, o grafo e a interface desacoplados e testáveis.
-- Produzir evidências para README, relatório técnico e vídeo da Fase 3.
+- Usar um `StateGraph` compilado no CLI.
+- Consultar prontuários e exames somente para pacientes explicitamente autorizados no contexto de demonstração.
+- Usar dados, protocolos e pacientes sintéticos coerentes com gestação, puerpério ou bebês até um ano.
+- Contextualizar respostas com dados recuperados e fontes rastreáveis.
+- Aplicar regras determinísticas de criticidade, alertas simulados idempotentes e validação antes de exibir qualquer resposta.
+- Integrar o adapter fine-tuned apenas para geração de resposta final, após smoke test de carregamento.
+- Produzir testes, README, relatório técnico e roteiro de vídeo compatíveis com a entrega.
 
 ## 4. Não objetivos
 
-- Conectar-se a um prontuário hospitalar real ou notificar uma equipe real.
-- Substituir a avaliação ou a decisão clínica humana.
-- Implementar prescrição, posologia ou ajuste terapêutico autônomo.
-- Tornar MemorySaver uma solução de persistência de produção.
-- Tornar FastAPI/SSE requisito para a primeira entrega do workflow.
+- Integração com prontuário, identidade, alertas ou dados reais de hospital.
+- API FastAPI/SSE, autenticação corporativa ou checkpointer durável no MVP.
+- Prescrição, posologia, ajuste terapêutico ou decisão clínica autônoma.
+- Garantir detecção semântica absoluta de toda alucinação de texto livre.
+- Usar o modelo fine-tuned para tool calling, extração de IDs, autorização, roteamento ou criticidade.
 
-## 5. Escopo clínico e dados
+## 5. Escopo de dados e confiança
 
-O domínio será materno-infantil: gestantes, puérperas e bebês até um ano. A decisão preserva o escopo declarado pelo modelo e pelo prompt mais recentes.
-
-Os pacientes, exames e protocolos de demonstração devem ser sintéticos e coerentes com esse domínio. Dados genéricos hoje existentes devem ser substituídos ou identificados como legado e excluídos da demonstração clínica. Nenhum dado real de paciente deve ser incluído.
-
-## 6. Estado atual e pré-requisitos
-
-| Item | Estado atual | Decisão |
-| --- | --- | --- |
-| Orquestração | Agente ReAct decide livremente as tools. | Substituir pelo StateGraph explícito. |
-| Dados | SQLite e ferramentas de consulta já existem. | Extrair para repositório injetável e popular apenas dados sintéticos. |
-| Prompt | O system message é criado, mas não chega de forma explícita ao agente atual. | Aplicar prompts em cada nó de LLM. |
-| Fine-tuning | A documentação declara Qwen + LoRA; a função atual usa pipeline de demonstração. | Validar adapter/modelo antes de alegar integração completa. |
-| Structured output | Pode não ser suportado pelo pipeline textual. | Detectar capacidades e usar fallback determinístico. |
-| Memória | MemorySaver opera apenas no processo. | Documentar a limitação e projetar checkpointer durável como evolução. |
-| Dependências | requirements e pyproject divergem. | Definir pyproject e uv.lock como fonte de verdade. |
-| Autorização | Inexistente. | Exigir contexto de autorização antes de consulta identificável. |
-
-## 7. Decisões arquiteturais
-
-### 7.1 StateGraph em vez de ReAct como orquestrador
-
-O StateGraph controlará as rotas de negócio e os invariantes de segurança. LangChain continua responsável por prompts, parsers, LLM e tools.
-
-**Motivo:** ReAct oferece flexibilidade, mas não garante que prontuário, exames, validação ou alerta ocorram na ordem exigida.
-
-### 7.2 Serviços Python por trás das tools
-
-Os nós chamarão interfaces de serviços por injeção de dependência. As quatro tools existentes serão adaptadores finos desses serviços, preservando compatibilidade com o CLI.
-
-**Motivo:** Os mesmos comportamentos passam a ser testáveis sem LLM, graph runner ou tool calling.
-
-### 7.3 Autorização antes da recuperação
-
-Cada execução recebe:
+O MVP opera somente em modo `demo`, com fixtures sintéticas versionadas. O CLI cria o contexto de acesso; a pergunta do usuário nunca pode fornecer ou ampliar permissões.
 
 ~~~python
 class RequestContext(BaseModel):
     conversation_id: str
     requester_id: str
-    authorized_patient_ids: set[str]
-    mode: Literal["demo", "authenticated"]
+    authorized_patient_ids: frozenset[str]
+    mode: Literal["demo"]
 ~~~
 
-No modo demo, a lista é sintética e explícita. No modo autenticado, ela deverá vir de um serviço de identidade. Sem contexto autorizado, o repositório não é chamado.
+Uma futura API autenticada deverá criar esse contexto em serviço de identidade confiável. Até existir essa integração, qualquer tentativa de usar modo autenticado deve falhar de modo seguro.
 
-**Motivo:** O prompt e o validador de texto não impedem acesso indevido ao prontuário.
+Regras de acesso:
 
-### 7.4 Capacidades explícitas de LLM
+- `conversation_id` identifica memória e auditoria; não concede autorização.
+- Cada leitura identificável revalida o paciente contra `authorized_patient_ids`.
+- ID ausente, ambíguo, inexistente ou não autorizado não provoca busca aproximada, enumeração nem acesso ao repositório.
+- Protocolos sintéticos não identificáveis podem ser consultados sem paciente.
+- Conteúdo recuperado é sempre dado delimitado, nunca instrução para o modelo.
 
-O workflow terá duas dependências de LLM, injetadas por papel e nunca escolhidas livremente por um nó:
-
-| Dependência | Modelo inicial | Nós permitidos | Formato e limite |
-| --- | --- | --- | --- |
-| `general_llm` | OpenAI `gpt-4.1-mini` | `interpretar_pergunta`, `analisar_informacoes`, criticidade auxiliar, clarificação e crítica auxiliar da resposta | JSON Schema estrito quando houver contrato estruturado. Não chama tools nem toma decisões de segurança. |
-| `final_answer_llm` | Qwen3.5-4B + adapter LoRA fine-tuned | Somente `gerar_resposta` | Texto final baseado apenas no estado autorizado e nas fontes recuperadas. |
-
-O adapter de LLM declara suporte a chat, JSON estruturado e streaming. A `general_llm` produz campos estruturados, que são validados antes de alterar o estado. Para modelo textual:
-
-- o ID é extraído e validado deterministicamente;
-- a condição é normalizada contra o catálogo de protocolos;
-- a LLM pode propor extrações ou um resumo, mas não define autorização, rotas de negócio, criticidade final nem inventa identificadores.
-
-O modelo fine-tuned não é usado para tool calling, roteamento, extração de IDs, autorização, alerta, auditoria ou validação. O pipeline de treino demonstra respostas finais, mas não demonstra suporte a tools ou roteamento.
-
-**Motivo:** Um HuggingFacePipeline textual não deve ser tratado como um chat model com tool calling ou structured output; o modelo fine-tuned foi treinado para redação final, enquanto os controles de segurança precisam ser determinísticos e testáveis.
-
-### 7.5 Alertas de demonstração
-
-Alertas serão eventos idempotentes persistidos em uma tabela alerts, contendo audit_id, paciente opcional, motivo, timestamp e chave de idempotência.
-
-**Motivo:** O desafio pede emissão de alertas, mas a demonstração não pode alegar que notificou uma equipe real. A interface e a documentação devem chamá-los de simulados.
-
-## 8. Arquitetura proposta
+## 6. Arquitetura do MVP
 
 ~~~text
-CLI / API opcional
+CLI (`python -m app.cli`)
        |
-RequestContext + pergunta
+pergunta + RequestContext sintético
        |
 StateGraph
-  |-- nós de domínio
-  |-- rotas condicionais
-  |-- checkpointer
+  |-- nós e rotas determinísticos
+  |-- adapter Qwen + LoRA apenas na resposta final
        |
-Serviços: autorização | repositório | alerta | validador | auditoria
+serviços Python injetáveis
+  |-- autorização | repositório SQLite | criticidade
+  |-- alerta simulado | validador | auditoria
        |
-SQLite sintético
-
-LangChain e adaptadores de LLM são usados nos nós de interpretação, análise,
-clarificação/crítica auxiliar e geração de resposta. `general_llm` atende os nós
-intermediários; `final_answer_llm` é exclusivo da geração final.
+SQLite com fixtures, alerts e audit_events
 ~~~
 
-| Camada | Responsabilidade |
+### 6.1 Backend local de referência
+
+Será implementado um backend mínimo, local e baseado em SQLite para permitir que o `StateGraph` seja exercitado com dependências reais, e não somente com fakes. Ele é um adaptador de referência para a demonstração e para os testes de integração; não é uma API de produção.
+
+Seu escopo é limitado a:
+
+- `MedicalRepositorySqlite` com pacientes, exames e protocolos sintéticos materno-infantis;
+- autorização de demonstração baseada em `RequestContext`;
+- persistência SQLite de `alerts` simulados e `audit_events` minimizados;
+- implementação das portas descritas em [langgraph-backend-contract.md](langgraph-backend-contract.md).
+
+Ele não inclui FastAPI, SSE, autenticação corporativa, banco remoto, notificações externas, filas ou checkpointer durável. Essas evoluções continuam fora do MVP.
+
+| Camada | Responsabilidade no MVP |
 | --- | --- |
-| Adaptador de LLM | Capacidades, invocação do modelo e streaming. |
-| LangChain | Prompts, Pydantic e parsers. |
-| LangGraph | Estado, nós, rotas, retries e checkpointer. |
-| Serviços | Regras, autorização, SQLite, alertas e auditoria. |
-| API | Tradução opcional para FastAPI/SSE. |
+| `app/graph` | Estado, nós, rotas e compilação do `StateGraph`. |
+| `app/services` | Regras determinísticas, autorização, SQLite, alertas, auditoria e validação. |
+| `app/llm` | Carregamento e prompt do adapter final; contrato de geração. |
+| `app/cli.py` | Contexto demo, entrada, exibição segura e evidências da execução. |
+| `tests/` | Unitários com fakes e integração com SQLite sintético. |
 
-## 9. Estado e contratos
+As tools LangChain existentes podem ser adaptadores finos de serviços, mas não são a autoridade do fluxo. O ReAct em `main.py` permanece legado até a demonstração do novo CLI passar.
 
-O estado contém mensagens com reducer add_messages, RequestContext, audit_id, pergunta, patient_id, condition, intent, status de autorização, contexto recuperado, fontes, análise, criticidade, alerta, rascunho, resposta final, status de entrega, violações, contador de revisão e código de erro.
+As assinaturas, modelos Pydantic, responsabilidades, erros e checklist de handoff entre o grafo e essas dependências estão definidos em [langgraph-backend-contract.md](langgraph-backend-contract.md). O StateGraph depende somente dessas portas, permitindo testar suas rotas com fakes antes da integração com SQLite ou o adapter real.
 
-As fontes seguem o contrato do frontend:
+## 7. Estado e contratos
+
+O estado contém mensagens, `RequestContext`, `audit_id`, pergunta original, paciente e condição normalizados, intenção, autorização, contexto recuperado, fontes, análise, criticidade, alerta, rascunho, resposta final, resultado da validação, violações, contador de revisão e código de erro.
+
+`audit_id`, pergunta original, `RequestContext` e versões de regras/protocolos são imutáveis depois de `inicializar_execucao`. Cada nó retorna somente o fragmento de estado que possui. `messages` usa `add_messages`; fontes são deduplicadas por `id`.
 
 ~~~python
 class Source(BaseModel):
-    id: str
+    id: str                 # Ex.: protocol:hipertensao-gestacional:v1
     title: str
     snippet: str | None = None
     kind: Literal["protocolo", "prontuario", "exame", "documento"]
 ~~~
 
-Cada nó retorna somente o fragmento de estado modificado. Sources são deduplicadas por id. A resposta só pode citar fontes que existam no estado.
+Fontes são enumeradas no prompt como `[S1]`, `[S2]` e assim por diante, cada uma mapeada para um `Source.id` existente no estado. A resposta final só pode citar esses marcadores enumerados; o validador verifica seu mapeamento para fontes recuperadas. Essa regra prova rastreabilidade de fontes recuperadas, mas não afirma verificar semanticamente toda paráfrase produzida por texto livre.
 
-## 10. Workflow
+## 8. Workflow
 
 Os nós são:
 
-1. inicializar_execucao
-2. interpretar_pergunta
-3. autorizar_acesso
-4. buscar_prontuario
-5. verificar_exames
-6. consultar_protocolo
-7. analisar_informacoes
-8. registrar_alerta_simulado
-9. gerar_resposta
-10. validar_seguranca
+1. `inicializar_execucao`
+2. `interpretar_pergunta`
+3. `autorizar_acesso`
+4. `buscar_prontuario`
+5. `verificar_exames`
+6. `consultar_protocolo`
+7. `analisar_informacoes`
+8. `registrar_alerta_simulado`
+9. `gerar_resposta`
+10. `validar_seguranca`
 
-Uso de LLM por nó:
-
-| Nó | Uso de LLM | Autoridade final |
-| --- | --- | --- |
-| `inicializar_execucao` | Não usa LLM. | Código. |
-| `interpretar_pergunta` | `general_llm` para extrair campos em JSON Schema. | Validador determinístico; dúvida ou conflito pede clarificação. |
-| `autorizar_acesso`, `buscar_prontuario`, `verificar_exames`, `consultar_protocolo` | Não usam LLM. | Serviços Python. |
-| `analisar_informacoes` | `general_llm` pode sintetizar achados estruturados. | Regras e dados recuperados. |
-| `registrar_alerta_simulado` | Não usa LLM. | Regras determinísticas de criticidade e serviço de alerta. |
-| `gerar_resposta` | Exclusivamente `final_answer_llm` fine-tuned. | Validador de segurança e fontes. |
-| `validar_seguranca` | Pode chamar `general_llm` como crítica auxiliar. | Validador determinístico; uma crítica favorável não aprova resposta sozinha. |
+`interpretar_pergunta` usa parsing determinístico: extrai ID em formato aceito e normaliza condição contra o catálogo de protocolos. Dúvida, conflito ou ausência de ambos os campos resulta em clarificação. O MVP não depende de uma `general_llm`; uma interface para análise estruturada por LLM poderá ser adicionada futuramente sem conceder autoridade de segurança a ela.
 
 ~~~mermaid
 flowchart TD
   START --> init[inicializar_execucao] --> interpret[interpretar_pergunta]
-  interpret --> patient{Paciente?}
+  interpret --> patient{Paciente identificado?}
   patient -->|sim| auth[autorizar_acesso]
+  auth -->|negado, ausente ou inválido| limited[resposta de limitação]
   auth -->|autorizado| record[buscar_prontuario] --> exams[verificar_exames]
-  auth -->|negado| limited[resposta de limitação]
-  patient -->|não| condition{Condição?}
-  exams --> condition
-  condition -->|sim| protocol[consultar_protocolo] --> analysis[analisar_informacoes]
-  condition -->|não| analysis
-  analysis --> critical{Crítico?}
+  patient -->|não| condition{Condição reconhecida?}
+  condition -->|não| clarify[pedir dados mínimos]
+  condition -->|sim| protocol_general[consultar_protocolo]
+  exams --> condition_after_record{Condição reconhecida?}
+  condition_after_record -->|sim| protocol[consultar_protocolo]
+  condition_after_record -->|não| analysis[analisar_informacoes]
+  protocol --> analysis
+  protocol_general --> analysis
+  analysis --> critical{Regra crítica?}
   critical -->|sim e paciente| alert[registrar_alerta_simulado] --> answer[gerar_resposta]
   critical -->|sim sem paciente| escalation[resposta de escalonamento]
   critical -->|não| answer
   answer --> safety[validar_seguranca]
   limited --> safety
+  clarify --> safety
   escalation --> safety
   safety -->|aprovada| END
   safety -->|uma revisão| answer
-  safety -->|bloqueada ou clarificação| END
+  safety -->|bloqueada| blocked[mensagem segura de bloqueio] --> END
 ~~~
 
-### Regras de roteamento
+Regras de roteamento:
 
-- Paciente sem condição: prontuário e exames, depois análise; nunca consulta protocolo nulo.
-- Condição sem paciente: somente protocolo e resposta geral, sem contexto individual.
-- Sem paciente e sem condição: pedir dados mínimos, sem consulta.
-- Acesso negado: não chamar repositório clínico.
-- Caso crítico sem paciente: escalar para avaliação humana, sem alerta vinculado a um paciente inexistente.
-- Caso crítico com paciente: registrar o alerta simulado antes da resposta.
+- Sem paciente e sem condição: clarificar sem consulta e sem LLM.
+- Condição sem paciente: recuperar somente protocolo e responder de forma geral.
+- Paciente sem condição: recuperar prontuário e exames autorizados; não consultar protocolo nulo.
+- Paciente e condição: recuperar prontuário, exames e protocolo autorizados/aplicáveis.
+- Acesso negado: nunca chamar repositório clínico.
+- Criticidade sem paciente: escalonar, sem alerta de paciente.
+- Criticidade com paciente: persistir alerta simulado antes da resposta.
 
-## 11. Segurança, validação e auditoria
+## 9. LLM e geração final
 
-Criticidade combina regras determinísticas versionadas do domínio, análise estruturada auxiliar da `general_llm` e contexto autorizado. A LLM não dispara alertas sozinha; as regras determinísticas definem o resultado final.
+O adapter Qwen3.5-4B + LoRA é a única LLM obrigatória do MVP e é injetado exclusivamente em `gerar_resposta`. Antes de uma execução clínica normal, o CLI executa smoke test que comprova carregar o adapter correto e registra sua versão no audit log.
 
-O validador determinístico:
+Não há fallback silencioso para modelo-base. Se o adapter não estiver disponível, o fluxo encerra com erro seguro e auditado. A opção legada `--finetuned` deve ser removida ou renomeada para não alegar carregar o adapter.
 
-- bloqueia prescrição, dose, posologia e ajuste como conduta autônoma;
-- permite citar dose ou medicamento recuperado como fato, não como recomendação nova;
-- permite resumir protocolo recuperado e atribuído a fonte;
-- rejeita fatos, exames e fontes ausentes do estado;
-- bloqueia resposta individual quando o contexto é insuficiente;
-- exige escalonamento humano para casos críticos;
-- permite apenas uma reformulação; depois entrega uma mensagem segura de bloqueio.
+O prompt final contém apenas pergunta, fatos autorizados, fontes enumeradas e limites de resposta. O modelo não recebe poderes para escolher tools, pacientes ou rotas. A geração é acumulada por completo; nenhum token de rascunho é exibido antes de `validar_seguranca` aprová-lo.
 
-Uma candidata reprovada nunca é exibida. A mensagem de bloqueio é uma resposta nova e validada.
+## 10. Segurança e validação
 
-O audit logger registra audit_id, início/fim de nó, rota, duração, fontes referenciadas, alerta e resultado da validação. Não registra prontuário integral, chaves, prompts completos ou texto clínico desnecessário.
+O validador determinístico é a autoridade final. Ele:
 
-## 12. Alternativas consideradas
+- exige fontes citadas existentes no estado;
+- bloqueia resposta individual sem contexto autorizado suficiente;
+- bloqueia prescrição, dose, posologia e ajuste autônomo por padrões e regras explícitas;
+- permite fato recuperado apenas quando atribuído à fonte apropriada;
+- exige escalonamento humano para criticidade;
+- permite uma única reformulação;
+- substitui falha final por template seguro, sem vazar rascunho, prompt ou dados internos.
 
-| Alternativa | Decisão | Motivo |
-| --- | --- | --- |
-| Manter ReAct como fluxo principal | Rejeitada. | Não garante ordem, autorização, validação ou alerta. |
-| Usar LLM para toda extração e roteamento | Rejeitada. | IDs, autorização e condições precisam de controles determinísticos. |
-| Usar o fine-tuned como router ou para tool calling | Rejeitada. | O treino demonstra respostas finais, não suporte a chamadas de tools ou rotas. |
-| Usar uma única LLM para todos os nós | Rejeitada. | Separa a LLM geral estruturada da LLM fine-tuned de redação e reduz o escopo de confiança de cada uma. |
-| Validar só por prompt ou LLM avaliadora | Rejeitada. | Não fornece proteção testável contra respostas impróprias. |
-| Alerta real para equipe | Adiada. | Exige integração operacional, consentimento e observabilidade externa. |
-| FastAPI/SSE no núcleo inicial | Adiada. | É útil para o frontend, mas não bloqueia o entregável LangGraph. |
-| Checkpointer durável agora | Adiado. | MemorySaver é suficiente para a demonstração em processo; persistência real requer infraestrutura própria. |
+O validador oferece controles demonstráveis, não garantia de validação semântica total de toda frase livre. Essa limitação deve constar no README e no relatório técnico.
 
-## 13. Estrutura de código
+## 11. Criticidade, alertas e auditoria
+
+Criticidade vem de regras Python pequenas, versionadas e associadas a fixtures sintéticas. A LLM não determina nem dispara alertas.
+
+`alerts` armazena `audit_id`, paciente opcional, motivo/código de regra, versão da regra, timestamp e chave de idempotência única. O alerta é sempre chamado de **simulado registrado**, nunca de alerta enviado/notificado para equipe. Se sua persistência falhar, o workflow não entrega resposta clínica normal: audita a falha e retorna limitação segura.
+
+`audit_events` registra `audit_id`, início/fim de nó, rota, duração, IDs de fontes, versão de protocolo/regra, resultado de validação, alerta e código de erro. Não registra prontuário integral, prompts completos, chaves ou texto clínico desnecessário.
+
+SQLite é suficiente para fixtures, alertas e auditoria da demonstração. Filas, outbox distribuído, alertas externos e observabilidade operacional são evoluções fora de escopo.
+
+## 12. Dados e repositório
+
+O repositório encapsula SQLite por injeção de fábrica/conexão, inicializa fixtures idempotentes e expõe contratos tipados. Dados atuais genéricos serão substituídos por pacientes, exames e protocolos sintéticos materno-infantis, todos identificados como demonstração.
+
+Protocolos e regras de criticidade possuem versão. Cada fonte tem ID estável; a execução registra as versões efetivamente usadas. Não há dados reais de paciente no repositório, logs, vídeo ou dataset entregue.
+
+## 13. Falhas, memória e API futura
+
+Falha de parsing, repositório, carregamento do adapter ou validação encerra o fluxo sem novas consultas e produz mensagem segura/auditada. Consultas de leitura podem ser repetidas com segurança; efeitos de alerta usam idempotência e não devem receber retry automático cego.
+
+`MemorySaver` mantém contexto somente durante o processo e não concede autorização. O CLI gera ou recebe um `conversation_id` de demonstração; reiniciar o processo perde contexto, limitação que deve ser exibida na documentação.
+
+FastAPI/SSE não bloqueia a entrega. Se implementada depois, a API deve reconstituir o contexto de autorização no backend e emitir somente texto já validado, fontes e metadados mínimos de tools — nunca prontuário integral em eventos SSE.
+
+## 14. Estrutura de código
 
 ~~~text
 app/
 ├── graph/       state.py, nodes.py, routes.py, workflow.py
-├── llm/         factory.py, capabilities.py, prompts.py, schemas.py
+├── llm/         factory.py, prompts.py, schemas.py
 ├── services/    authorization.py, medical_repository.py,
-│                alert_service.py, safety_validator.py, audit_logger.py
-├── api/         routes.py e schemas.py, em fase posterior
+│                criticality.py, alert_service.py,
+│                safety_validator.py, audit_logger.py
 └── cli.py
 tests/
 ├── unit/
@@ -272,61 +237,50 @@ docs/
 └── relatorio-tecnico.md
 ~~~
 
-O repositório clínico encapsula SQLite, recebe conexão/fábrica por injeção de dependência, inicializa dados sintéticos idempotentes e inclui a tabela alerts.
+## 15. Testes e evidências
 
-## 14. Testes e validação
+Testes unitários usam serviços e LLMs falsas determinísticas. O adapter real aparece somente em smoke test separado. O aceite deve cobrir:
 
 | Caso | Resultado esperado |
 | --- | --- |
-| Paciente autorizado e condição | prontuário, exames e protocolo; fontes reais e resposta validada. |
-| Paciente sem condição | prontuário/exames e análise; sem protocolo nulo. |
-| Condição sem paciente | somente protocolo e resposta geral. |
-| ID não autorizado | nenhum acesso clínico; resposta segura. |
-| ID inexistente | ausência controlada e sem dados inventados. |
-| Pergunta insuficiente | pedido de esclarecimento sem consulta. |
-| Caso crítico com paciente | regra + análise e alerta idempotente antes da resposta. |
-| Caso crítico sem ID | escalonamento sem alerta de paciente. |
-| Prescrição ou dose nova | reformulação ou bloqueio. |
-| Dose recuperada | pode ser citada apenas como fato. |
-| Fonte inexistente ou falha do repositório | limitação segura e auditoria. |
-| Mesmo thread_id | contexto permitido no mesmo processo. |
-| Reinício | ausência de persistência documentada até checkpointer durável. |
-| API, quando existir | autorização, fontes, done final e cancelamento. |
+| Paciente autorizado + condição | Prontuário, exames e protocolo; fontes e resposta validada. |
+| Paciente sem condição | Prontuário/exames, sem protocolo nulo. |
+| Condição sem paciente | Somente protocolo e resposta geral. |
+| Sem paciente e sem condição | Clarificação sem consulta. |
+| ID não autorizado | Nenhuma leitura clínica e resposta segura. |
+| ID inexistente | Ausência controlada, sem dados inventados. |
+| Caso crítico com paciente | Alerta idempotente antes da resposta. |
+| Caso crítico sem paciente | Escalonamento, sem alerta vinculado. |
+| Falha de alerta | Limitação segura e auditoria. |
+| Prescrição/dose nova | Reformulação ou bloqueio. |
+| Citação inexistente | Bloqueio antes de exibir a resposta. |
+| Falha de repositório/modelo | Limitação segura e auditoria. |
+| Mesmo `thread_id` | Contexto no mesmo processo, sem ampliar autorização. |
+| Reinício | Perda de memória documentada. |
 
-Testes unitários usam serviços e LLM falsos determinísticos. Modelos reais entram apenas em smoke tests.
+## 16. Plano de entrega
 
-## 15. Plano de entrega
+1. Congelar SHA, alinhar README e dependências.
+2. Acordar e versionar o contrato em [langgraph-backend-contract.md](langgraph-backend-contract.md).
+3. Criar o backend local de referência: serviços injetáveis, schema SQLite, fixtures sintéticas, `alerts` e `audit_events`.
+4. Implementar estado, rotas e nós determinísticos do `StateGraph` com fakes das portas.
+5. Implementar fontes, criticidade, alerta idempotente e validador.
+6. Integrar adapter Qwen3.5-4B + LoRA exclusivamente em `gerar_resposta`; remover alegação incorreta de `--finetuned`.
+7. Criar testes unitários/integração e smoke test do adapter.
+8. Atualizar README, relatório técnico e roteiro de vídeo.
+9. Implementar FastAPI/SSE somente se sobrar tempo após a validação do núcleo.
 
-1. Congelar SHA, corrigir prompt, dependências e documentação do modelo.
-2. Extrair serviços, preparar dados sintéticos do domínio e criar alerts.
-3. Implementar estado, autorização, nós e rotas do StateGraph.
-4. Implementar `LLMFactory` com `general_llm=OpenAI gpt-4.1-mini` e `final_answer_llm=Qwen3.5-4B + LoRA`; injetar cada dependência apenas nos nós permitidos e remover o uso enganoso de `--finetuned` como se carregasse o adapter.
-5. Implementar schemas Pydantic, parsing/validação semântica e tratamento de recusa/erro da `general_llm`.
-6. Implementar criticidade, alerta, geração e validação.
-7. Implementar auditoria, fontes e documentação dos limites de memória.
-8. Criar testes, relatório técnico e roteiro de vídeo.
-9. Integrar FastAPI/SSE somente após a aprovação do núcleo.
-
-## 16. Riscos e mitigação
-
-| Risco | Mitigação |
-| --- | --- |
-| `general_llm` retorna JSON válido, porém semanticamente inadequado | Validar enums, IDs, catálogo, confiança e regras de negócio; em dúvida, pedir clarificação. |
-| Falha, timeout ou recusa da OpenAI | Não consultar dados adicionais nem gerar decisão clínica; registrar o evento minimizado e retornar clarificação/limitação segura. |
-| Modelo fine-tunado não suporta JSON/tools | Não usá-lo para JSON/tools; restringi-lo à geração final. |
-| Dados de demonstração fora do escopo | Substituir por dados sintéticos materno-infantis antes do vídeo. |
-| Vazamento de dados | Autorizar antes da busca, minimizar logs e usar somente dados sintéticos. |
-| Falso alerta | Regras versionadas, idempotência e alerta explicitamente simulado. |
-| Documentação diverge do código | Checklist de evidências e smoke test antes da demonstração. |
-| Escopo cresce com API | API é fase posterior e não bloqueia o grafo. |
+`pyproject.toml` e `uv.lock` são a fonte de verdade de dependências. O README deve usar `uv sync`; `requirements.txt` deve ser removido da instrução ou regenerado de modo compatível.
 
 ## 17. Critérios de sucesso
 
-- Existe um StateGraph compilado e usado pelo aplicativo.
-- Todas as consultas identificáveis passam por autorização.
-- Todas as respostas passam por validação antes de exibição.
-- Fontes exibidas foram de fato recuperadas.
-- Alertas simulados são idempotentes, rastreáveis e não são apresentados como notificação real.
-- Testes de rotas, segurança, falhas e criticidade passam sem API externa.
-- O repositório contém dataset anonimizado ou sintético, fine-tuning, integração LangChain, fluxo LangGraph e relatório técnico.
-- O vídeo de até 15 minutos mostra modelo, fluxo automatizado, resposta contextualizada, logs e validação.
+- O CLI usa `StateGraph`, não ReAct, para o caminho demonstrado.
+- Todas as leituras identificáveis são autorizadas antes do repositório.
+- Toda saída exibida foi validada antes da apresentação.
+- Fontes exibidas foram efetivamente recuperadas e suas citações são verificadas.
+- Alertas são persistidos, idempotentes, auditáveis e explicitamente simulados.
+- Dados da demonstração são sintéticos e materno-infantis.
+- O StateGraph possui testes de integração contra o backend local SQLite de referência, além dos testes unitários com fakes.
+- Testes de rotas, acesso, fontes, falhas, criticidade e validação passam sem API externa.
+- O adapter fine-tuned correto é carregado e demonstrado apenas como gerador final.
+- README, relatório e vídeo mostram arquitetura, limites, logs, fontes e evidências exigidas pela Fase 3.
