@@ -34,6 +34,21 @@ def _sources(*items) -> list[Source]:
 
 
 def build_workflow(deps: WorkflowDependencies):
+    def audited(name, node):
+        def invoke(state: WorkflowState):
+            try:
+                result = node(state)
+                if state.get("audit_id"):
+                    deps.audit.record_event(audit_id=state["audit_id"], event="completed", node=name, details={"error_code": result.get("error_code")}, idempotency_key=f"{state['audit_id']}:{name}:completed")
+                return result
+            except WorkflowServiceError as error:
+                if state.get("audit_id"):
+                    try:
+                        deps.audit.record_event(audit_id=state["audit_id"], event="failed", node=name, details={"error_code": type(error).__name__}, idempotency_key=f"{state['audit_id']}:{name}:failed")
+                    except WorkflowServiceError:
+                        pass
+                return {"error_code": type(error).__name__, "final_answer": SAFE_LIMITATION}
+        return invoke
     def initialize(state: WorkflowState):
         return {"audit_id": str(uuid.uuid4()), "revision_count": 0, "sources": [], "exams": []}
 
@@ -90,29 +105,39 @@ def build_workflow(deps: WorkflowDependencies):
         return {"final_answer": SAFE_LIMITATION}
 
     def route_after_interpret(state: WorkflowState):
+        if state.get("error_code") and state["error_code"] != "clarification": return "limitation"
         if state.get("error_code") == "clarification": return "limitation"
         return "authorize" if state.get("patient_id") else "protocol"
-    def route_after_authorize(state: WorkflowState): return "record" if state.get("authorized") else "limitation"
+    def route_after_authorize(state: WorkflowState): return "record" if state.get("authorized") and not state.get("error_code") else "limitation"
     def route_after_record(state: WorkflowState): return "limitation" if state.get("error_code") else "exams"
-    def route_after_exams(state: WorkflowState): return "protocol" if state.get("condition") else "analyze"
+    def route_after_exams(state: WorkflowState): return "limitation" if state.get("error_code") else ("protocol" if state.get("condition") else "analyze")
+    def route_after_protocol(state: WorkflowState): return "limitation" if state.get("error_code") else "analyze"
+    def route_after_analyze(state: WorkflowState): return "limitation" if state.get("error_code") else "criticality"
     def route_after_criticality(state: WorkflowState):
+        if state.get("error_code"): return "limitation"
         critical = state["criticality"].is_critical
         if critical and state.get("patient_id"): return "alert"
         if critical: return "limitation"
         return "generate"
     def route_after_validate(state: WorkflowState):
         return "generate" if state.get("revision_count") == 1 and not state.get("final_answer") else END
+    def route_after_alert(state: WorkflowState): return "limitation" if state.get("error_code") else "generate"
+    def route_after_generate(state: WorkflowState): return "limitation" if state.get("error_code") else "critique"
+    def route_after_critique(state: WorkflowState): return "limitation" if state.get("error_code") else "validate"
 
     graph = StateGraph(WorkflowState)
-    for name, node in {"initialize": initialize, "interpret": interpret, "authorize": authorize, "record": retrieve_record, "exams": retrieve_exams, "protocol": retrieve_protocol, "analyze": analyze, "criticality": criticality, "alert": alert, "generate": generate, "critique": critique, "validate": validate, "limitation": limitation}.items(): graph.add_node(name, node)
+    for name, node in {"initialize": initialize, "interpret": interpret, "authorize": authorize, "record": retrieve_record, "exams": retrieve_exams, "protocol": retrieve_protocol, "analyze": analyze, "criticality": criticality, "alert": alert, "generate": generate, "critique": critique, "validate": validate, "limitation": limitation}.items(): graph.add_node(name, audited(name, node))
     graph.add_edge(START, "initialize"); graph.add_edge("initialize", "interpret")
     graph.add_conditional_edges("interpret", route_after_interpret, {"authorize": "authorize", "protocol": "protocol", "limitation": "limitation"})
     graph.add_conditional_edges("authorize", route_after_authorize, {"record": "record", "limitation": "limitation"})
     graph.add_conditional_edges("record", route_after_record, {"exams": "exams", "limitation": "limitation"})
     graph.add_conditional_edges("exams", route_after_exams, {"protocol": "protocol", "analyze": "analyze"})
-    graph.add_edge("protocol", "analyze"); graph.add_edge("analyze", "criticality")
+    graph.add_conditional_edges("protocol", route_after_protocol, {"analyze": "analyze", "limitation": "limitation"})
+    graph.add_conditional_edges("analyze", route_after_analyze, {"criticality": "criticality", "limitation": "limitation"})
     graph.add_conditional_edges("criticality", route_after_criticality, {"alert": "alert", "generate": "generate", "limitation": "limitation"})
-    graph.add_edge("alert", "generate"); graph.add_edge("generate", "critique"); graph.add_edge("critique", "validate")
+    graph.add_conditional_edges("alert", route_after_alert, {"generate": "generate", "limitation": "limitation"})
+    graph.add_conditional_edges("generate", route_after_generate, {"critique": "critique", "limitation": "limitation"})
+    graph.add_conditional_edges("critique", route_after_critique, {"validate": "validate", "limitation": "limitation"})
     graph.add_conditional_edges("validate", route_after_validate, {"generate": "generate", END: END})
     graph.add_edge("limitation", END)
     return graph.compile()
