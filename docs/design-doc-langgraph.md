@@ -110,7 +110,7 @@ O adapter de LLM declara suporte a chat, JSON estruturado e streaming. A `genera
 - a condição é normalizada contra o catálogo de protocolos;
 - a LLM pode propor extrações ou um resumo, mas não define autorização, rotas de negócio, criticidade final nem inventa identificadores.
 
-O modelo fine-tuned não é usado para tool calling, roteamento, extração de IDs, autorização, alerta, auditoria ou validação. Seu dataset de treino contém respostas finais, não exemplos de tools ou de roteamento.
+O modelo fine-tuned não é usado para tool calling, roteamento, extração de IDs, autorização, alerta, auditoria ou validação. O pipeline de treino demonstra respostas finais, mas não demonstra suporte a tools ou roteamento.
 
 **Motivo:** Um HuggingFacePipeline textual não deve ser tratado como um chat model com tool calling ou structured output; o modelo fine-tuned foi treinado para redação final, enquanto os controles de segurança precisam ser determinísticos e testáveis.
 
@@ -248,7 +248,7 @@ O audit logger registra audit_id, início/fim de nó, rota, duração, fontes re
 | --- | --- | --- |
 | Manter ReAct como fluxo principal | Rejeitada. | Não garante ordem, autorização, validação ou alerta. |
 | Usar LLM para toda extração e roteamento | Rejeitada. | IDs, autorização e condições precisam de controles determinísticos. |
-| Usar o fine-tuned como router ou para tool calling | Rejeitada. | O treino foi feito para respostas finais e não contém chamadas de tools ou rotas. |
+| Usar o fine-tuned como router ou para tool calling | Rejeitada. | O treino demonstra respostas finais, não suporte a chamadas de tools ou rotas. |
 | Usar uma única LLM para todos os nós | Rejeitada. | Separa a LLM geral estruturada da LLM fine-tuned de redação e reduz o escopo de confiança de cada uma. |
 | Validar só por prompt ou LLM avaliadora | Rejeitada. | Não fornece proteção testável contra respostas impróprias. |
 | Alerta real para equipe | Adiada. | Exige integração operacional, consentimento e observabilidade externa. |
