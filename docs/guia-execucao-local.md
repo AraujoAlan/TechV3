@@ -48,27 +48,34 @@ Conteúdo esperado:
 
 ```env
 OPENAI_API_KEY=sua_chave_openai
-QWEN_LORA_ADAPTER_PATH=/home/igor/repos/fiap/TechV3/modelos/lora_model
+QWEN_LORA_ADAPTER_PATH=/caminho/absoluto/para/modelos/lora_model
 QWEN_BASE_MODEL=unsloth/Qwen3.5-4B
 ```
 
-Não compartilhe nem versione a chave OpenAI.
+Não compartilhe nem versione a chave OpenAI. Após baixar o adapter na seção seguinte, obtenha um caminho absoluto portável com:
+
+```bash
+uv run python -c "from pathlib import Path; print(Path('modelos/lora_model').resolve())"
+```
+
+Copie o resultado para `QWEN_LORA_ADAPTER_PATH`.
 
 ## 4. Baixar o adapter LoRA
 
 O adapter é público no repositório Hugging Face [`emidiosouza/assistente-maternidade`](https://huggingface.co/emidiosouza/assistente-maternidade). Baixe-o para o caminho configurado no `.env`:
 
 ```bash
-mkdir -p modelos/lora_model
+ADAPTER_DIR="$(pwd)/modelos/lora_model"
+mkdir -p "$ADAPTER_DIR"
 uv run hf download emidiosouza/assistente-maternidade \
-  --local-dir modelos/lora_model
+  --local-dir "$ADAPTER_DIR"
 ```
 
 Confirme os artefatos:
 
 ```bash
-ls modelos/lora_model/adapter_config.json
-ls modelos/lora_model/adapter_model.safetensors
+ls "$ADAPTER_DIR/adapter_config.json"
+ls "$ADAPTER_DIR/adapter_model.safetensors"
 ```
 
 O adapter configura `unsloth/Qwen3.5-4B` como o modelo-base. O download do adapter é pequeno (cerca de 65 MB), mas o modelo-base é baixado na primeira execução e ocupa cerca de 9,35 GB.
