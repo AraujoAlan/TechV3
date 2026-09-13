@@ -37,7 +37,7 @@ class OpenAIGeneralLLM:
 
 
 class QwenLoraFinalAnswerLLM:
-    """Carrega o mesmo Qwen 4-bit usado no treino antes de aplicar o LoRA."""
+    """Carrega o Qwen multimodal 4-bit usado no treino antes de aplicar o LoRA."""
     def __init__(self, adapter_path: str | None = None, base_model: str | None = None):
         self.adapter_path = adapter_path or os.getenv("QWEN_LORA_ADAPTER_PATH")
         self.base_model = base_model or os.getenv("QWEN_BASE_MODEL", "unsloth/Qwen3.5-4B")
@@ -62,9 +62,14 @@ class QwenLoraFinalAnswerLLM:
             raise FinalAnswerModelUnavailable("QWEN_LORA_ADAPTER_PATH não configurado")
         try:
             from peft import PeftModel
-            from transformers import AutoModelForCausalLM, AutoTokenizer
+            # O checkpoint LoRA foi salvo sobre Qwen3_5ForConditionalGeneration.
+            # AutoModelForCausalLM cria somente o modelo de texto (``model.layers``),
+            # enquanto o adapter referencia ``model.language_model.layers``. Usar a
+            # auto-classe multimodal preserva essa estrutura e permite aplicar os
+            # pesos do adapter aos módulos corretos.
+            from transformers import AutoModelForImageTextToText, AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.base_model)
-            model = AutoModelForCausalLM.from_pretrained(
+            model = AutoModelForImageTextToText.from_pretrained(
                 self.base_model,
                 device_map="auto",
                 quantization_config=self.quantization_config(),
