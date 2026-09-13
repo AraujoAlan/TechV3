@@ -89,6 +89,10 @@ uv run python -m app.cli --smoke-general-llm
 uv run python -m app.cli --smoke-final-answer-llm
 ```
 
+`--smoke-general-llm` confirma que `OPENAI_API_KEY` permite ao `gpt-4.1-mini` retornar uma interpretação estruturada. `--smoke-final-answer-llm` verifica somente a configuração e o carregamento do tokenizer, do modelo-base Qwen e do adapter LoRA. Nenhum dos dois executa o `StateGraph`, consulta SQLite ou gera uma resposta clínica.
+
+O fluxo novo não possui fallback de modelo: se o adapter ou modelo-base não estiver disponível, o comando falha de modo seguro. `--fake` usa LLMs determinísticas apenas para desenvolvimento e testes; `python main.py --base-legacy` é o protótipo ReAct anterior e não substitui o adapter fine-tuned.
+
 Só depois de ambos passarem execute o fluxo real:
 
 ```bash
