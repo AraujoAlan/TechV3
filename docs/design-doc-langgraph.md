@@ -1,6 +1,6 @@
 # Design Doc — Workflow LangGraph do Assistente Clínico
 
-**Status:** Aprovado para implementação
+**Status:** Implementado no MVP local
 
 **Base:** `main` em `5d9acf3`, ou sucessor validado no início da implementação
 
@@ -16,7 +16,7 @@ O objetivo é atender à Fase 3 com uma demonstração local, modular e testáve
 
 ## 2. Contexto e fatos verificados
 
-A implementação atual contém ReAct, quatro tools, SQLite e `MemorySaver`, mas não possui autorização antes de ler prontuários, validação determinística, fontes rastreáveis ou auditoria persistida. O banco atual contém exemplos genéricos fora do escopo materno-infantil e deve ser substituído antes da demonstração.
+Antes deste MVP, o protótipo ReAct usava tools e `MemorySaver`, sem autorização antes de ler prontuários, validação determinística, fontes rastreáveis ou auditoria persistida. O caminho atual de demonstração é o `StateGraph` descrito neste documento, com SQLite e fixtures materno-infantis sintéticas.
 
 O adapter Qwen3.5-4B + LoRA foi treinado e avaliado nos notebooks, mas ainda não é carregado pelo runtime. A opção legada `main.py --finetuned` carrega `Qwen/Qwen2.5-1.5B-Instruct`, isto é, um modelo-base de demonstração, não o adapter treinado. Ela não pode ser usada como prova de integração do fine-tuning.
 
@@ -143,7 +143,7 @@ O workflow possui duas dependências de LLM, injetadas por papel e nunca escolhi
 | Dependência | Modelo | Nós permitidos | Limites |
 | --- | --- | --- | --- |
 | `general_llm` | OpenAI `gpt-4.1-mini` | `interpretar_pergunta`, `analisar_informacoes`, clarificação e `criticar_resposta` | Retorna saída estruturada validada; não chama tools, não acessa dados e não toma decisões de segurança. |
-| `final_answer_llm` | Qwen3.5-4B + adapter LoRA fine-tuned | Somente `gerar_resposta` | Redige a resposta final somente a partir de fatos autorizados e fontes recuperadas. |
+| `final_answer_llm` | Qwen3.5-4B + adapter LoRA fine-tuned (padrão) ou OpenAI configurável para teste ponta a ponta | Somente `gerar_resposta` | Redige a resposta final somente a partir de fatos autorizados e fontes recuperadas. |
 
 `interpretar_pergunta` usa `general_llm` para propor intenção, condição e referências ao paciente em formato estruturado. O ID precisa corresponder ao formato aceito e é validado deterministicamente; a condição é normalizada contra o catálogo de protocolos, incluindo remoção determinística de acentos e equivalência entre espaços, `_` e `-` (por exemplo, `puerpério` → `puerperio`). Dúvida, conflito ou ausência de campos mínimos resulta em clarificação, sem consulta clínica. A LLM não pode inventar identificadores, ampliar permissões ou decidir rotas de negócio.
 
@@ -178,14 +178,13 @@ flowchart TD
   protocol_general --> analysis
   analysis --> critical{Regra crítica?}
   critical -->|sim e paciente| alert[registrar_alerta_simulado] --> answer[gerar_resposta]
-  critical -->|sim sem paciente| escalation[resposta de escalonamento]
+  critical -->|sim sem paciente| limited
   critical -->|não| answer
   answer --> escalation_check[garantir_escalonamento_critico]
   escalation_check --> critic[criticar_resposta]
   critic --> safety[validar_seguranca]
-  limited --> safety
-  clarify --> safety
-  escalation --> safety
+  limited --> END
+  clarify --> END
   safety -->|aprovada| END
   safety -->|revisão e contador = 0| revise[incrementar contador de revisão] --> answer
   safety -->|bloqueada ou contador = 1| blocked[mensagem segura de bloqueio] --> END
@@ -198,7 +197,7 @@ Regras de roteamento:
 - Paciente sem condição: recuperar prontuário e exames autorizados; não consultar protocolo nulo.
 - Paciente e condição: recuperar prontuário, exames e protocolo autorizados/aplicáveis.
 - Acesso negado: nunca chamar repositório clínico.
-- Criticidade sem paciente: escalonar, sem alerta de paciente.
+- Criticidade sem paciente: encerrar com limitação segura, sem alerta vinculado.
 - Criticidade com paciente: persistir alerta simulado antes da resposta.
 - Após `gerar_resposta`, `garantir_escalonamento_critico` preserva o rascunho não crítico. Para caso crítico, garante a orientação fixa de busca imediata de avaliação humana antes da crítica e validação; isso não depende de a LLM ter seguido o prompt.
 - `gerar_resposta` sempre segue para `garantir_escalonamento_critico`, `criticar_resposta` e então para `validar_seguranca`; a crítica é auditável e não toma decisão de rota.
@@ -206,7 +205,7 @@ Regras de roteamento:
 
 ### 8.1 Exemplos de execução
 
-Os exemplos mostram o caminho completo desde a mensagem até a saída validada. `general_llm` é OpenAI `gpt-4.1-mini`; `final_answer_llm` é Qwen3.5-4B + adapter LoRA.
+Os exemplos mostram o caminho completo desde a mensagem até a saída validada. `general_llm` é OpenAI `gpt-4.1-mini`; `final_answer_llm` é Qwen3.5-4B + adapter LoRA por padrão, podendo ser OpenAI configurável para teste ponta a ponta.
 
 #### Paciente autorizado e caso crítico
 
@@ -259,7 +258,7 @@ flowchart TD
 
 `general_llm` é OpenAI `gpt-4.1-mini` e é obrigatório nos nós permitidos na seção anterior. Ele recebe apenas a pergunta ou dados já autorizados e delimitados, devolve saída estruturada conforme schema e suas falhas, recusas ou respostas inválidas encerram a etapa em clarificação ou limitação segura. Em `criticar_resposta`, devolve violações candidatas e justificativas associadas a fontes; não aprova, bloqueia ou repete o fluxo. Não há fallback que transforme um modelo textual em autoridade de acesso, criticidade ou validação.
 
-`final_answer_llm` é o adapter Qwen3.5-4B + LoRA e é injetado exclusivamente em `gerar_resposta`. Antes de uma execução clínica normal, o CLI executa smoke test que comprova carregar o adapter correto e registra sua versão no audit log.
+`final_answer_llm` é injetado exclusivamente em `gerar_resposta`. O provider padrão é Qwen3.5-4B + LoRA, carregado como modelo multimodal em 4 bits antes de aplicar o adapter; `QWEN_ENABLE_CPU_OFFLOAD=true` permite teste híbrido GPU+CPU em máquinas com pouca VRAM. Para validar o fluxo ponta a ponta sem carregar o Qwen, o CLI aceita `FINAL_ANSWER_PROVIDER=openai` e `OPENAI_FINAL_MODEL` (padrão `gpt-4.1-mini`). Os smoke tests são comandos explícitos do operador; o CLI não os executa automaticamente nem registra a versão do adapter no audit log.
 
 Não há fallback silencioso para modelo-base. Se o adapter não estiver disponível, o fluxo encerra com erro seguro e auditado. A opção legada `--finetuned` deve ser removida ou renomeada para não alegar carregar o adapter.
 
@@ -286,7 +285,7 @@ Criticidade vem de regras Python pequenas, versionadas e associadas a fixtures s
 
 `alerts` armazena `audit_id`, paciente opcional, motivo/código de regra, versão da regra, timestamp e chave de idempotência única. O alerta é sempre chamado de **simulado registrado**, nunca de alerta enviado/notificado para equipe. Se sua persistência falhar, o workflow não entrega resposta clínica normal: audita a falha e retorna limitação segura.
 
-`audit_events` registra `audit_id`, início/fim de nó, rota, duração, IDs de fontes, versão de protocolo/regra, resultado resumido da crítica auxiliar, resultado de validação, alerta e código de erro. Não registra prontuário integral, prompts completos, chaves ou texto clínico desnecessário.
+`audit_events` registra `audit_id`, nó, evento, `details`, chave de idempotência e timestamp. Há eventos `started`, `completed`, `failed` e, para chamadas de LLM, `llm_usage` com modelo e tokens. Em `validate`, `details` inclui contador, quantidade e texto resumido das violações. Não registra prontuário integral, prompts completos, chaves ou texto clínico desnecessário.
 
 SQLite é suficiente para fixtures, alertas e auditoria da demonstração. Filas, outbox distribuído, alertas externos e observabilidade operacional são evoluções fora de escopo.
 
@@ -300,7 +299,7 @@ Protocolos e regras de criticidade possuem versão. Cada fonte tem ID estável; 
 
 Falha de parsing, de `general_llm`, de repositório, de carregamento do adapter ou de validação encerra o fluxo sem novas consultas e produz mensagem segura/auditada. Consultas de leitura podem ser repetidas com segurança; efeitos de alerta usam idempotência e não devem receber retry automático cego.
 
-`MemorySaver` mantém contexto somente durante o processo e não concede autorização. O CLI gera ou recebe um `conversation_id` de demonstração; reiniciar o processo perde contexto, limitação que deve ser exibida na documentação.
+O MVP atual não usa checkpointer nem memória conversacional durável. O CLI recebe um `conversation_id` de demonstração no `RequestContext`, mas cada execução é independente; esse identificador não concede autorização.
 
 FastAPI/SSE não bloqueia a entrega. Se implementada depois, a API deve reconstituir o contexto de autorização no backend e emitir somente texto já validado, fontes e metadados mínimos de tools — nunca prontuário integral em eventos SSE.
 
@@ -308,8 +307,8 @@ FastAPI/SSE não bloqueia a entrega. Se implementada depois, a API deve reconsti
 
 ~~~text
 app/
-├── graph/       state.py, nodes.py, routes.py, workflow.py
-├── llm/         factory.py, prompts.py, schemas.py
+├── graph/       state.py, workflow.py
+├── llm/         factory.py, fakes.py
 ├── services/    authorization.py, medical_repository.py,
 │                criticality.py, alert_service.py,
 │                safety_validator.py, audit_logger.py
@@ -339,8 +338,8 @@ Testes unitários usam serviços e LLMs falsas determinísticas. As integraçõe
 | Prescrição/dose nova | Reformulação ou bloqueio. |
 | Citação inexistente | Bloqueio antes de exibir a resposta. |
 | Falha de repositório/modelo | Limitação segura e auditoria. |
-| Mesmo `thread_id` | Contexto no mesmo processo, sem ampliar autorização. |
-| Reinício | Perda de memória documentada. |
+| Execuções independentes com o mesmo `conversation_id` demo | Não compartilham memória nem ampliam autorização. |
+| Reinício | Nenhuma memória conversacional é persistida. |
 
 ## 16. Plano de entrega
 

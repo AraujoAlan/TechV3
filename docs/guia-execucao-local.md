@@ -51,8 +51,11 @@ OPENAI_API_KEY=sua_chave_openai
 QWEN_LORA_ADAPTER_PATH=/caminho/absoluto/para/modelos/lora_model
 QWEN_BASE_MODEL=unsloth/Qwen3.5-4B
 QWEN_ENABLE_CPU_OFFLOAD=false
+QWEN_CPU_OFFLOAD_MAX_MEMORY=12GiB
 QWEN_MAX_NEW_TOKENS=256
 MAX_RESPONSE_REVISIONS=1
+FINAL_ANSWER_PROVIDER=qwen
+OPENAI_FINAL_MODEL=gpt-4.1-mini
 ```
 
 Não compartilhe nem versione a chave OpenAI. Após baixar o adapter na seção seguinte, obtenha um caminho absoluto portável com:
@@ -92,7 +95,7 @@ uv run python -m app.cli --smoke-general-llm
 uv run python -m app.cli --smoke-final-answer-llm
 ```
 
-`--smoke-general-llm` confirma que `OPENAI_API_KEY` permite ao `gpt-4.1-mini` retornar uma interpretação estruturada. `--smoke-final-answer-llm` verifica somente a configuração e o carregamento do tokenizer, do modelo-base Qwen e do adapter LoRA. Nenhum dos dois executa o `StateGraph`, consulta SQLite ou gera uma resposta clínica.
+`--smoke-general-llm` confirma que `OPENAI_API_KEY` permite ao `gpt-4.1-mini` retornar uma interpretação estruturada. Com `FINAL_ANSWER_PROVIDER=qwen`, `--smoke-final-answer-llm` carrega tokenizer, modelo-base e adapter LoRA, sem executar o `StateGraph` nem gerar resposta. Com `FINAL_ANSWER_PROVIDER=openai`, esse mesmo comando faz uma geração curta para verificar o provider OpenAI; ainda não executa o `StateGraph` nem consulta SQLite.
 
 Em uma GPU pequena, é possível testar o carregamento híbrido, mantendo módulos que não couberem na GPU em RAM/FP32:
 
@@ -123,7 +126,7 @@ O padrão permanece `FINAL_ANSWER_PROVIDER=qwen`; não há fallback automático 
 
 ## Auditoria e consumo do OpenAI
 
-Cada execução registra no SQLite `clinical_demo.db` eventos `started`, `completed` e `failed`. Nos nós que chamam o OpenAI (`interpret`, `analyze` e `critique`), o evento `llm_usage` também armazena modelo e tokens de entrada, saída e total retornados pela API. A conclusão de `validate` inclui contagem e descrição das violações, sem armazenar o texto gerado. Os prompts e a chave da API não são gravados.
+Cada execução registra no SQLite `clinical_demo.db` eventos `started`, `completed` e `failed`. Nos nós que chamam OpenAI (`interpret`, `analyze`, `critique` e também `generate` quando `FINAL_ANSWER_PROVIDER=openai`), o evento `llm_usage` armazena modelo e tokens de entrada, saída e total retornados pela API. A conclusão de `validate` inclui contagem e descrição das violações, sem armazenar o texto gerado. Os prompts e a chave da API não são gravados.
 
 Para consultar a última execução:
 
@@ -147,7 +150,7 @@ for node, event, details, created_at in rows:
 PY
 ```
 
-O fluxo novo não possui fallback de modelo: se o adapter ou modelo-base não estiver disponível, o comando falha de modo seguro. `--fake` usa LLMs determinísticas apenas para desenvolvimento e testes; `python main.py --base-legacy` é o protótipo ReAct anterior e não substitui o adapter fine-tuned.
+Não há fallback automático entre providers. Com `FINAL_ANSWER_PROVIDER=qwen`, indisponibilidade do adapter ou modelo-base encerra o fluxo de modo seguro; com `FINAL_ANSWER_PROVIDER=openai`, indisponibilidade da API encerra-o do mesmo modo. `--fake` usa LLMs determinísticas apenas para desenvolvimento e testes; `python main.py --base-legacy` é o protótipo ReAct anterior e não substitui o adapter fine-tuned.
 
 Só depois de ambos passarem execute o fluxo real:
 
@@ -163,7 +166,21 @@ O loader carrega o mesmo modelo-base em 4 bits antes de aplicar o adapter LoRA, 
 
 Quando a máquina não atender esses requisitos, use `--fake` para demonstrar e validar localmente o workflow LangGraph, ou execute os smoke tests do adapter em uma máquina com GPU maior, como Colab ou Kaggle. Não substitua o adapter por um modelo-base ou modelo menor sem registrar e revalidar a mudança.
 
-## 7. Solução de problemas
+## 7. Avaliação manual do fluxo real
+
+Para uma avaliação ponta a ponta sem GPU, use `FINAL_ANSWER_PROVIDER=openai` e execute os cinco cenários abaixo. Eles cobrem caso crítico autorizado, pergunta geral por protocolo, ausência de exame, acesso negado e paciente inexistente.
+
+```bash
+FINAL_ANSWER_PROVIDER=openai MAX_RESPONSE_REVISIONS=1 uv run python -m app.cli --authorized-patient P-042 "Paciente P-042 com hipertensão gestacional tem exames pendentes?"
+FINAL_ANSWER_PROVIDER=openai MAX_RESPONSE_REVISIONS=1 uv run python -m app.cli "Quais sinais exigem atenção no puerpério?"
+FINAL_ANSWER_PROVIDER=openai MAX_RESPONSE_REVISIONS=1 uv run python -m app.cli --authorized-patient P-101 "Paciente P-101 tem exames pendentes?"
+FINAL_ANSWER_PROVIDER=openai MAX_RESPONSE_REVISIONS=1 uv run python -m app.cli "Paciente P-042 com hipertensão gestacional tem exames pendentes?"
+FINAL_ANSWER_PROVIDER=openai MAX_RESPONSE_REVISIONS=1 uv run python -m app.cli --authorized-patient P-999 "Paciente P-999 tem exames pendentes?"
+```
+
+Em caso crítico, `garantir_escalonamento_critico` acrescenta deterministicamente a orientação de avaliação humana se a geração a omitir; o validador mantém essa regra como defesa adicional. A validação confirma a estrutura e o mapeamento das citações, não a fidelidade semântica de toda afirmação livre. Portanto, respostas clínicas detalhadas exigem fontes igualmente detalhadas.
+
+## 8. Solução de problemas
 
 | Sintoma | Ação |
 | --- | --- |

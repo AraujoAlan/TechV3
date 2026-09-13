@@ -1,6 +1,6 @@
 # Contrato de integração — LangGraph e serviços
 
-**Status:** contrato para implementação
+**Status:** contrato implementado no MVP local
 
 **Consumidor:** `app/graph` (StateGraph)
 
@@ -124,7 +124,7 @@ class ValidationResult(BaseModel):
     safe_message: str | None = None
 ~~~
 
-`Source.id` deve ser estável, único e versionado quando aplicável, por exemplo `protocol:hipertensao-gestacional:v1`. O backend retorna fatos e fontes, não texto pronto de resposta clínica. `candidate_patient_id` e `candidate_condition` são apenas propostas da LLM: o nó `interpretar_pergunta` valida o formato do ID e normaliza a condição contra o catálogo antes de alterar o estado ou escolher uma rota. Cada `source_id` retornado por `AnalysisResult` ou `CritiqueResult` deve existir nas fontes fornecidas à LLM.
+`Source.id` deve ser estável, único e versionado quando aplicável, por exemplo `protocol:hipertensao-gestacional:v1`. O backend retorna fatos e fontes, não texto pronto de resposta clínica. `candidate_patient_id` e `candidate_condition` são apenas propostas da LLM: o nó `interpretar_pergunta` valida o formato do ID e normaliza a condição contra o catálogo antes de alterar o estado ou escolher uma rota. A normalização remove acentos e considera espaço e `_` equivalentes a `-` (por exemplo, `puerpério` → `puerperio`), sem aceitar valores fora do catálogo. Cada `source_id` retornado por `AnalysisResult` ou `CritiqueResult` deve existir nas fontes fornecidas à LLM.
 
 ## 4. Portas requeridas pelo StateGraph
 
@@ -231,7 +231,7 @@ class SafetyValidator(Protocol):
 | `AuditLogger` | Backend/auditoria | Grava `audit_events` SQLite minimizado. | Guarda eventos em memória. |
 | `GeneralLLM` | LangChain/modelo | OpenAI `gpt-4.1-mini`; produz interpretação, análise e crítica estruturadas. | Retorna resultados tipados pré-definidos ou falha sob comando. |
 | `SafetyValidator` | Segurança/backend | Aplica regras de fontes, contexto e bloqueios; considera a crítica apenas como evidência auxiliar. | Aprova, pede revisão ou bloqueia conforme cenário. |
-| `FinalAnswerLLM` | LangChain/modelo | Carrega Qwen3.5-4B + adapter LoRA e gera texto. | Retorna texto pré-definido. |
+| `FinalAnswerLLM` | LangChain/modelo | Usa Qwen3.5-4B + adapter LoRA como padrão; OpenAI configurável é permitido apenas para teste ponta a ponta sem GPU. | Retorna texto pré-definido. |
 | `StateGraph` | Responsável por LangGraph | Orquestra portas, estado e rotas. | N/A; é testado com as fakes acima. |
 
 ## 6. Contratos de falha
@@ -251,9 +251,11 @@ class SafetyValidator(Protocol):
 
 Exceções de infraestrutura devem ser específicas, como `RepositoryUnavailable`, `AlertUnavailable`, `GeneralLLMUnavailable` e `FinalAnswerModelUnavailable`; não usar `None` para representar indisponibilidade.
 
+Após `FinalAnswerLLM.generate`, o grafo executa `garantir_escalonamento_critico`: se `CriticalityResult.is_critical` for verdadeiro e o rascunho não contiver orientação de avaliação humana, acrescenta uma mensagem fixa de escalonamento. Esse nó não é uma porta; é uma regra determinística do grafo. `SafetyValidator` continua verificando a presença do escalonamento como defesa em profundidade.
+
 ## 7. Persistência esperada do backend
 
-O backend pode reaproveitar `hospital.db`, mas deve substituir fixtures genéricas e adicionar tabelas mínimas:
+O backend local usa `clinical_demo.db`, com fixtures sintéticas, e mantém as tabelas mínimas:
 
 ~~~text
 alerts(
@@ -262,13 +264,12 @@ alerts(
 )
 
 audit_events(
-  event_id, audit_id, node, event, duration_ms,
-  source_ids, rule_version, critique_result, validation_result,
-  error_code, idempotency_key UNIQUE, created_at
+  event_id, audit_id, node, event, details,
+  idempotency_key UNIQUE, created_at
 )
 ~~~
 
-O backend não armazena prompts completos, chaves, prontuário integral ou rascunho reprovado no audit log. `critique_result` contém apenas um resumo minimizado dos códigos de achado, sem texto clínico desnecessário. O alerta tem status fixo `simulated_recorded`; não há integração de notificação real.
+O backend não armazena prompts completos, chaves, prontuário integral ou rascunho reprovado no audit log. `details` guarda somente metadados minimizados: erro de nó, uso da LLM (modelo e tokens) e, em `validate`, contador e violações resumidas. O alerta tem status fixo `simulated_recorded`; não há integração de notificação real.
 
 ## 8. Exemplo mínimo de fake
 
