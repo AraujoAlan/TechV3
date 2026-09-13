@@ -1,30 +1,26 @@
 import { ENDPOINTS, USE_MOCK } from './config'
 import { ApiError } from './errors'
-import { mockStreamChat } from './mock'
-import { readEventStream } from './sse'
-import type { ChatRequest, StreamEvent } from './types'
+import { mockSendChat } from './mock'
+import type { ChatRequest, ChatResponse } from './types'
 
 /**
- * Envia o histórico para o assistente e devolve os eventos do stream.
+ * Envia a pergunta corrente e devolve a resposta JSON já validada.
  *
- * Enquanto o backend HTTP não existir, `VITE_USE_MOCK` mantém a UI viva com
- * o mock local — a assinatura é a mesma, então plugar o real não muda nada
- * acima desta função.
+ * Com `VITE_USE_MOCK=true` usa o mock local com o mesmo `ChatResponse`.
  */
-export async function* streamChat(
+export async function sendChat(
   request: ChatRequest,
   signal?: AbortSignal,
-): AsyncGenerator<StreamEvent> {
+): Promise<ChatResponse> {
   if (USE_MOCK) {
-    yield* mockStreamChat(request, signal)
-    return
+    return mockSendChat(request, signal)
   }
 
   const response = await fetch(ENDPOINTS.chat, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
+      Accept: 'application/json',
     },
     body: JSON.stringify(request),
     signal,
@@ -33,30 +29,23 @@ export async function* streamChat(
   if (!response.ok) {
     throw new ApiError(await describeFailure(response), response.status)
   }
-  if (!response.body) {
-    throw new ApiError('O servidor respondeu sem corpo de stream.', response.status)
-  }
 
-  for await (const data of readEventStream(response.body, signal)) {
-    // Sentinela opcional, usada por alguns servidores SSE para fechar o turno.
-    if (data === '[DONE]') return
-
-    const event = parseEvent(data)
-    if (event) yield event
+  const body: unknown = await response.json()
+  if (!isChatResponse(body)) {
+    throw new ApiError('A API respondeu com um formato inesperado.')
   }
+  return body
 }
 
-/** Descarta payloads malformados em vez de derrubar a conversa inteira. */
-function parseEvent(data: string): StreamEvent | null {
-  try {
-    const parsed: unknown = JSON.parse(data)
-    if (parsed && typeof parsed === 'object' && 'type' in parsed) {
-      return parsed as StreamEvent
-    }
-  } catch {
-    // Ignora: um evento corrompido não deve interromper o stream.
-  }
-  return null
+function isChatResponse(value: unknown): value is ChatResponse {
+  if (!value || typeof value !== 'object') return false
+  const body = value as Record<string, unknown>
+  return (
+    typeof body.audit_id === 'string' &&
+    (body.outcome === 'completed' || body.outcome === 'limited') &&
+    typeof body.answer === 'string' &&
+    Array.isArray(body.sources)
+  )
 }
 
 /** Extrai a mensagem de erro do backend, com fallback no status HTTP. */

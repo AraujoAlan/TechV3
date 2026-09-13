@@ -70,6 +70,22 @@ Com provider Qwen, o segundo comando carrega modelo-base e adapter; com provider
 
 O MVP não possui memória conversacional persistente. O `conversation_id` de demonstração não concede autorização. O validador é um controle demonstrável, não uma garantia de validação semântica absoluta de texto livre.
 
+
+## API e interface web
+
+```bash
+# API (demo com LLMs determinísticas)
+API_USE_FAKES=true DEMO_AUTHORIZED_PATIENT_IDS=P-042 \
+  uv run uvicorn app.api.app:app --reload --port 8000
+
+# Frontend (outro terminal)
+cd frontend && echo 'VITE_USE_MOCK=false' > .env.local && npm run dev
+```
+
+Contrato: `POST /api/chat` recebe `{ "question", "conversation_id?" }` e devolve
+apenas a resposta já validada (`answer`, `sources`, `outcome`, `alert`). Detalhes
+em [frontend/CONTRATO.md](frontend/CONTRATO.md).
+
 ## Documentação
 
 - [Guia de configuração e execução local](docs/guia-execucao-local.md)

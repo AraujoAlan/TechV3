@@ -10,7 +10,7 @@ O projeto opera exclusivamente com dados de demonstração. Os prontuários, exa
 
 O assistente apoia a consulta de informações disponíveis no contexto autorizado, mas não substitui avaliação profissional. As regras do MVP bloqueiam padrões de prescrição, dose, posologia e ajuste autônomo; casos críticos exigem orientação de avaliação humana e registram somente um alerta **simulado**.
 
-Não fazem parte do MVP atual: API pública, autenticação corporativa, dados reais, notificação externa a equipes, checkpointer durável ou integração do frontend com o workflow. A integração frontend–backend via API é evolução planejada para a etapa final de produto e demonstração; ela deverá manter o backend como autoridade de autorização e validação.
+A API FastAPI (`POST /api/chat`, `GET /api/health`) e o frontend React já estão integrados: o navegador envia só a pergunta corrente; o servidor reconstrói o `RequestContext`, executa o `StateGraph` e devolve apenas resposta validada, fontes e alerta simulado. Não fazem parte do MVP: autenticação corporativa hospitalar, dados reais, notificação externa a equipes ou checkpointer conversacional durável.
 
 ## 3. Dados, preprocessing, anonimização e curadoria
 
@@ -142,10 +142,10 @@ Para Qwen em GPU pequena, `QWEN_ENABLE_CPU_OFFLOAD=true` permite teste GPU+CPU, 
 
 1. Enriquecer os protocolos sintéticos e adicionar validação de suporte semântico entre afirmações e fontes.
 2. Consolidar a avaliação final no split de teste e complementar a loss com rubrica humana de segurança, fidelidade às fontes e utilidade.
-3. Implementar API autenticada para o `StateGraph`; a API deverá reconstruir o `RequestContext` no backend e expor somente resposta validada, fontes e metadados mínimos.
-4. Integrar o frontend existente à API, removendo respostas mockadas e preservando estados de carregamento, fontes, limitações e alerta simulado.
+3. Substituir a autenticação demo (`DEMO_REQUESTER_ID` / `DEMO_AUTHORIZED_PATIENT_IDS`) por provedor de identidade hospitalar.
+4. Avaliar eventos de progresso seguros (sem streaming de rascunho) e checkpointer conversacional, se necessários à demonstração.
 5. Gravar vídeo de até 15 minutos cobrindo pipeline de dados/fine-tuning, smoke test, caso crítico autorizado, bloqueio de acesso, fontes, audit log e limitações conhecidas.
 
 ## 11. Conclusão
 
-O MVP demonstra o ciclo técnico requerido: dados curados para fine-tuning, adapter LoRA, integração LangChain/LangGraph, consulta estruturada contextualizada, controles de segurança, fontes rastreáveis e auditoria. Os resultados de loss indicam adaptação ao corpus, enquanto os testes de fluxo demonstram autorização, bloqueio seguro e escalonamento determinístico. As limitações são explícitas: não há dados reais, validação semântica completa, API autenticada ou integração frontend–backend nesta etapa.
+O MVP demonstra o ciclo técnico requerido: dados curados para fine-tuning, adapter LoRA, integração LangChain/LangGraph, consulta estruturada contextualizada, controles de segurança, fontes rastreáveis e auditoria. Os resultados de loss indicam adaptação ao corpus, enquanto os testes de fluxo demonstram autorização, bloqueio seguro e escalonamento determinístico. As limitações são explícitas: não há dados reais, validação semântica completa nem autenticação corporativa; a API demo e o frontend já operam sobre o contrato JSON validado.

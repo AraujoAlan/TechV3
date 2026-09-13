@@ -12,14 +12,14 @@ export function MessageList({ messages }: { messages: Message[] }): JSX.Element 
   const viewportRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
 
-  // O texto do último turno é a dependência: cada token novo reposiciona.
+  // Atualiza o scroll quando chega conteúdo ou fontes da última mensagem.
   const tail = messages.at(-1)
 
   useEffect(() => {
     const viewport = viewportRef.current
     if (!viewport || !stickToBottom.current) return
     viewport.scrollTop = viewport.scrollHeight
-  }, [messages.length, tail?.content, tail?.toolCalls?.length])
+  }, [messages.length, tail?.content, tail?.sources?.length])
 
   function handleScroll(): void {
     const viewport = viewportRef.current

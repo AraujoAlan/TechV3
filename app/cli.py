@@ -1,38 +1,11 @@
 import argparse
-import os
-import sqlite3
-import re
 
 from dotenv import load_dotenv
 
 from app.contracts.models import RequestContext
-from app.graph.workflow import WorkflowDependencies, build_workflow
-from app.llm.factory import OpenAIFinalAnswerLLM, OpenAIGeneralLLM, QwenLoraFinalAnswerLLM
-from app.llm.fakes import FakeFinalAnswerLLM, FakeGeneralLLM
-from app.services.alert_service import SqliteAlertService
-from app.services.audit_logger import SqliteAuditLogger
-from app.services.authorization import DemoAuthorizationService
-from app.services.criticality import MaternalInfantCriticalityService
-from app.services.medical_repository import MedicalRepositorySqlite
-from app.services.safety_validator import DeterministicSafetyValidator
-
-
-def build_final_answer_llm():
-    provider = os.getenv("FINAL_ANSWER_PROVIDER", "qwen").lower()
-    if provider == "qwen":
-        return QwenLoraFinalAnswerLLM()
-    if provider == "openai":
-        return OpenAIFinalAnswerLLM()
-    raise ValueError("FINAL_ANSWER_PROVIDER deve ser 'qwen' ou 'openai'")
-
-
-def build_dependencies(database: str, use_fakes: bool) -> WorkflowDependencies:
-    repository = MedicalRepositorySqlite.open(database)
-    repository.initialize()
-    connection = repository.connection
-    general = FakeGeneralLLM() if use_fakes else OpenAIGeneralLLM()
-    final = FakeFinalAnswerLLM() if use_fakes else build_final_answer_llm()
-    return WorkflowDependencies(DemoAuthorizationService(), repository, MaternalInfantCriticalityService(), SqliteAlertService(connection), SqliteAuditLogger(connection), general, final, DeterministicSafetyValidator())
+from app.graph.workflow import build_workflow
+from app.llm.factory import OpenAIGeneralLLM
+from app.runtime import build_dependencies, build_final_answer_llm, prepare_fake_interpretation
 
 
 def main() -> int:
@@ -52,12 +25,7 @@ def main() -> int:
         print(build_final_answer_llm().smoke_test()); return 0
     deps = build_dependencies(args.database, args.fake)
     if args.fake:
-        from app.contracts.models import InterpretationResult
-        deps.general_llm.interpretation = InterpretationResult(
-            candidate_patient_id=re.search(r"P-\d+", args.question).group(0) if re.search(r"P-\d+", args.question) else None,
-            candidate_condition="hipertensao-gestacional" if "hipertens" in args.question.lower() else None,
-            requires_clarification=not ("P-" in args.question or "hipertens" in args.question.lower()),
-        )
+        prepare_fake_interpretation(deps, args.question)
     graph = build_workflow(deps)
     context = RequestContext(conversation_id="demo-cli", requester_id="demo-cli", authorized_patient_ids=frozenset(args.authorized_patient))
     state = graph.invoke({"question": args.question, "request_context": context})
