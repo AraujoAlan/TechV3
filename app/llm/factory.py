@@ -1,8 +1,19 @@
 import os
-from dataclasses import dataclass
+import re
 
 from app.contracts.errors import FinalAnswerModelUnavailable, GeneralLLMUnavailable
 from app.contracts.models import AnalysisResult, CritiqueResult, InterpretationResult, Source
+
+FINAL_ANSWER_SYSTEM = (
+    "Voce e um assistente clinico de hospital maternidade. Responde a medicos em registro tecnico. "
+    "Apoia a decisao clinica; nao a substitui. Nunca prescreva medicamento, dose ou conduta final. "
+    "Responda de forma direta e curta (2 a 4 frases). "
+    "Use somente fatos presentes no contexto recuperado; nao acrescente complicacoes, farmacos, "
+    "sistemas ou condutas que nao estejam no contexto. "
+    "Se a pergunta for sobre exames pendentes, diga claramente se ha ou nao exame pendente e qual. "
+    "Cite apenas marcadores [S#] listados no pedido. Nao invente marcadores. "
+    "Se o contexto indicar sinais de alarme ou gravidade, oriente avaliacao humana imediata."
+)
 
 
 def _usage_details(message, default_model: str) -> dict[str, str | int | None]:
@@ -14,6 +25,67 @@ def _usage_details(message, default_model: str) -> dict[str, str | int | None]:
         "output_tokens": usage.get("output_tokens", usage.get("completion_tokens")),
         "total_tokens": usage.get("total_tokens"),
     }
+
+
+def allowed_citation_markers(sources: list[Source]) -> list[str]:
+    return [f"[S{index}]" for index in range(1, len(sources) + 1)]
+
+
+def build_final_answer_user_prompt(
+    *,
+    question: str,
+    context: str,
+    sources: list[Source],
+    revision_violations: list[str],
+    revision_attempt: int,
+) -> str:
+    markers = allowed_citation_markers(sources)
+    marker_list = ", ".join(markers) if markers else "(nenhuma fonte recuperada)"
+    revision = ""
+    if revision_violations:
+        revision = (
+            f"\nCorrija estas violacoes na tentativa {revision_attempt}: {revision_violations}. "
+            f"Use somente as citacoes permitidas: {marker_list}."
+        )
+    return (
+        "Responda a pergunta de forma objetiva, sem divagar.\n"
+        f"Citacoes permitidas (use pelo menos uma se houver fontes): {marker_list}.\n"
+        f"Pergunta: {question}\n"
+        f"Contexto recuperado (unico material permitido):\n{context}"
+        f"{revision}"
+    )
+
+
+def sanitize_generated_answer(answer: str) -> str:
+    """Remove artefatos comuns de chat template / thinking vazados na geracao."""
+    text = answer.strip()
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"</?think>", "", text, flags=re.IGNORECASE)
+    # Mantem so o ultimo turno util se o modelo ecoar papeis.
+    for marker in ("\nassistant\n", "\nAssistant\n", "\nASSISTANT\n"):
+        if marker in text:
+            text = text.split(marker)[-1]
+    text = re.sub(r"^(assistant|system|user)\s*\n", "", text, flags=re.IGNORECASE)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def normalize_source_citations(answer: str, sources: list[Source]) -> str:
+    """Garante que so restem [S#] validos; se faltar citacao, anexa as fontes recuperadas."""
+    markers = allowed_citation_markers(sources)
+    text = sanitize_generated_answer(answer)
+    if not markers:
+        return re.sub(r"\s*\[S\d+\]", "", text).strip()
+
+    def _keep_or_drop(match: re.Match[str]) -> str:
+        marker = match.group(0)
+        return marker if marker in markers else ""
+
+    cleaned = re.sub(r"\[S\d+\]", _keep_or_drop, text)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r" {2,}", " ", cleaned).strip()
+    if not any(marker in cleaned for marker in markers):
+        cleaned = f"{cleaned} {' '.join(markers)}".strip()
+    return cleaned
 
 
 class OpenAIGeneralLLM:
@@ -66,17 +138,19 @@ class OpenAIFinalAnswerLLM:
             raise FinalAnswerModelUnavailable("Não foi possível configurar o modelo final OpenAI") from error
 
     def generate(self, *, question: str, context: str, sources: list[Source], revision_violations: list[str], revision_attempt: int) -> str:
-        prompt = (
-            "Responda somente com base nos fatos e fontes fornecidos. Não prescreva. "
-            "Inclua pelo menos uma citação [S#] existente para cada fato clínico. "
-            "Se o contexto indicar gravidade ou sinais de alarme, oriente busca imediata de avaliação humana.\n"
-            f"Pergunta: {question}\nContexto:\n{context}\n"
-            f"Violações a corrigir na tentativa {revision_attempt}: {revision_violations}"
+        user_prompt = build_final_answer_user_prompt(
+            question=question,
+            context=context,
+            sources=sources,
+            revision_violations=revision_violations,
+            revision_attempt=revision_attempt,
         )
+        prompt = f"{FINAL_ANSWER_SYSTEM}\n\n{user_prompt}"
         try:
             response = self.client.invoke(prompt)
             self.last_usage = _usage_details(response, self.model_name)
-            return response.content if isinstance(response.content, str) else str(response.content)
+            text = response.content if isinstance(response.content, str) else str(response.content)
+            return normalize_source_citations(text, sources)
         except Exception as error:
             raise FinalAnswerModelUnavailable("Modelo final OpenAI indisponível ou resposta inválida") from error
 
@@ -134,7 +208,8 @@ class QwenLoraFinalAnswerLLM:
             # auto-classe multimodal preserva essa estrutura e permite aplicar os
             # pesos do adapter aos módulos corretos.
             from transformers import AutoModelForImageTextToText, AutoTokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(self.base_model)
+            # Tokenizer do adapter traz o chat_template alinhado ao treino/demo.
+            self.tokenizer = AutoTokenizer.from_pretrained(self.adapter_path)
             model_kwargs = {
                 "device_map": "auto",
                 "quantization_config": self.quantization_config(cpu_offload=self.cpu_offload),
@@ -155,13 +230,37 @@ class QwenLoraFinalAnswerLLM:
             raise FinalAnswerModelUnavailable("Falha ao carregar Qwen3.5-4B com adapter LoRA") from error
 
     def generate(self, *, question: str, context: str, sources: list[Source], revision_violations: list[str], revision_attempt: int) -> str:
-        if self.model is None or self.tokenizer is None: self.load()
-        prompt = f"Responda somente com base nos fatos e fontes. Não prescreva. Cite [S#].\nPergunta: {question}\nContexto:\n{context}\nViolações a corrigir: {revision_violations}"
+        if self.model is None or self.tokenizer is None:
+            self.load()
+        user_prompt = build_final_answer_user_prompt(
+            question=question,
+            context=context,
+            sources=sources,
+            revision_violations=revision_violations,
+            revision_attempt=revision_attempt,
+        )
+        messages = [
+            {"role": "system", "content": FINAL_ANSWER_SYSTEM},
+            {"role": "user", "content": user_prompt},
+        ]
         try:
-            import torch
-            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+            if getattr(self.tokenizer, "chat_template", None):
+                prompt = self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            else:
+                prompt = f"{FINAL_ANSWER_SYSTEM}\n\n{user_prompt}"
+            inputs = self.tokenizer(prompt, return_tensors="pt")
+            device = next(self.model.parameters()).device
+            inputs = {key: value.to(device) for key, value in inputs.items()}
             output = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False)
-            return self.tokenizer.decode(output[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True).strip()
+            text = self.tokenizer.decode(
+                output[0][inputs["input_ids"].shape[-1] :],
+                skip_special_tokens=True,
+            ).strip()
+            return normalize_source_citations(text, sources)
         except Exception as error:
             raise FinalAnswerModelUnavailable("Falha durante geração com adapter") from error
 
