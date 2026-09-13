@@ -97,11 +97,11 @@ uv run python -m app.cli \
   "Paciente P-042 com hipertensão gestacional tem exames pendentes?"
 ```
 
-## 6. Limitação deste computador
+## 6. Requisitos para a geração local real
 
-O computador usado neste repositório tem RTX 2050 com 4 GB de VRAM e 15 GB de RAM. O loader atual não quantiza o Qwen3.5-4B; por isso, o adapter real não deve carregar de forma confiável nessa máquina. Use `--fake` para demonstrar localmente o workflow LangGraph.
+O loader atual carrega o Qwen3.5-4B sem quantização. Antes do smoke test final, confirme que a máquina tem espaço em disco para o download do modelo-base, RAM suficiente e VRAM compatível com a carga do modelo e da geração. Como referência prática, uma GPU com 12–16 GB de VRAM ou mais oferece uma margem adequada; GPUs menores podem falhar por memória insuficiente.
 
-Para a execução real do adapter, use uma GPU com ao menos 12–16 GB de VRAM, por exemplo uma T4 em Colab ou Kaggle. Não substitua o adapter por um modelo-base ou modelo menor sem registrar e revalidar a mudança.
+Quando a máquina não atender esses requisitos, use `--fake` para demonstrar e validar localmente o workflow LangGraph, ou execute os smoke tests do adapter em uma máquina com GPU maior, como Colab ou Kaggle. Não substitua o adapter por um modelo-base ou modelo menor sem registrar e revalidar a mudança.
 
 ## 7. Solução de problemas
 
