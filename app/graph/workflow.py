@@ -1,4 +1,6 @@
 import os
+import re
+import unicodedata
 import uuid
 from dataclasses import dataclass
 
@@ -10,6 +12,7 @@ from app.contracts.ports import AlertService, AuditLogger, AuthorizationService,
 from .state import WorkflowState
 
 SAFE_LIMITATION = "Não foi possível fornecer uma resposta clínica segura nesta execução. Procure avaliação de um profissional de saúde."
+CRITICAL_ESCALATION = "Como há sinais de alarme no contexto, recomenda-se busca imediata de avaliação humana."
 
 
 def max_response_revisions() -> int:
@@ -45,6 +48,16 @@ def _sources(*items) -> list[Source]:
     return result
 
 
+def normalize_condition(candidate: str | None, catalog: frozenset[str]) -> str | None:
+    """Aceita variações de acento, espaço e sublinhado sem ampliar o catálogo."""
+    if not candidate:
+        return None
+    normalized = unicodedata.normalize("NFKD", candidate).encode("ascii", "ignore").decode().lower().strip()
+    normalized = re.sub(r"[\s_]+", "-", normalized)
+    normalized = re.sub(r"-+", "-", normalized)
+    return normalized if normalized in catalog else None
+
+
 def build_workflow(deps: WorkflowDependencies):
     max_revisions = max_response_revisions()
 
@@ -58,8 +71,9 @@ def build_workflow(deps: WorkflowDependencies):
                 result = node(state)
                 audit_id = state.get("audit_id") or result.get("audit_id")
                 if audit_id:
-                    if name in {"interpret", "analyze", "critique"}:
-                        usage = getattr(deps.general_llm, "last_usage", None)
+                    if name in {"interpret", "analyze", "critique", "generate"}:
+                        llm = deps.final_answer_llm if name == "generate" else deps.general_llm
+                        usage = getattr(llm, "last_usage", None)
                         if usage:
                             deps.audit.record_event(audit_id=audit_id, event="llm_usage", node=name, details=usage, idempotency_key=f"{audit_id}:{name}:{attempt}:llm_usage")
                     details = {"error_code": result.get("error_code")}
@@ -86,7 +100,7 @@ def build_workflow(deps: WorkflowDependencies):
     def interpret(state: WorkflowState):
         result: InterpretationResult = deps.general_llm.interpret(question=state["question"])
         patient_id = result.candidate_patient_id if result.candidate_patient_id and result.candidate_patient_id.startswith("P-") else None
-        condition = result.candidate_condition if result.candidate_condition in deps.condition_catalog else None
+        condition = normalize_condition(result.candidate_condition, deps.condition_catalog)
         return {"patient_id": patient_id, "condition": condition, "error_code": "clarification" if not patient_id and not condition else None}
 
     def authorize(state: WorkflowState):
@@ -123,6 +137,13 @@ def build_workflow(deps: WorkflowDependencies):
         context = "\n".join(f"[S{i + 1}] {source.snippet or source.title}" for i, source in enumerate(state.get("sources", [])))
         return {"draft": deps.final_answer_llm.generate(question=state["question"], context=context, sources=state.get("sources", []), revision_violations=state.get("violations", []), revision_attempt=state["revision_count"])}
 
+    def enforce_critical_escalation(state: WorkflowState):
+        critical = state.get("criticality", CriticalityResult(is_critical=False, rule_version="v1"))
+        draft = state["draft"].strip()
+        if not critical.is_critical or re.search(r"avaliação humana|procure.*(serviço|atendimento)|escalon", draft, re.IGNORECASE):
+            return {"draft": draft}
+        return {"draft": f"{draft}\n\n{CRITICAL_ESCALATION}"}
+
     def critique(state: WorkflowState):
         return {"critique": deps.general_llm.critique(question=state["question"], answer=state["draft"], sources=state.get("sources", []), has_individual_context=bool(state.get("record")), is_critical=state.get("criticality", CriticalityResult(is_critical=False, rule_version="v1")).is_critical)}
 
@@ -154,11 +175,12 @@ def build_workflow(deps: WorkflowDependencies):
     def route_after_validate(state: WorkflowState):
         return "generate" if state.get("revision_count", 0) <= max_revisions and not state.get("final_answer") else END
     def route_after_alert(state: WorkflowState): return "limitation" if state.get("error_code") else "generate"
-    def route_after_generate(state: WorkflowState): return "limitation" if state.get("error_code") else "critique"
+    def route_after_generate(state: WorkflowState): return "limitation" if state.get("error_code") else "enforce_critical_escalation"
+    def route_after_enforce_critical_escalation(state: WorkflowState): return "limitation" if state.get("error_code") else "critique"
     def route_after_critique(state: WorkflowState): return "limitation" if state.get("error_code") else "validate"
 
     graph = StateGraph(WorkflowState)
-    for name, node in {"initialize": initialize, "interpret": interpret, "authorize": authorize, "record": retrieve_record, "exams": retrieve_exams, "protocol": retrieve_protocol, "analyze": analyze, "criticality": criticality, "alert": alert, "generate": generate, "critique": critique, "validate": validate, "limitation": limitation}.items(): graph.add_node(name, audited(name, node))
+    for name, node in {"initialize": initialize, "interpret": interpret, "authorize": authorize, "record": retrieve_record, "exams": retrieve_exams, "protocol": retrieve_protocol, "analyze": analyze, "criticality": criticality, "alert": alert, "generate": generate, "enforce_critical_escalation": enforce_critical_escalation, "critique": critique, "validate": validate, "limitation": limitation}.items(): graph.add_node(name, audited(name, node))
     graph.add_edge(START, "initialize"); graph.add_edge("initialize", "interpret")
     graph.add_conditional_edges("interpret", route_after_interpret, {"authorize": "authorize", "protocol": "protocol", "limitation": "limitation"})
     graph.add_conditional_edges("authorize", route_after_authorize, {"record": "record", "limitation": "limitation"})
@@ -168,7 +190,8 @@ def build_workflow(deps: WorkflowDependencies):
     graph.add_conditional_edges("analyze", route_after_analyze, {"criticality": "criticality", "limitation": "limitation"})
     graph.add_conditional_edges("criticality", route_after_criticality, {"alert": "alert", "generate": "generate", "limitation": "limitation"})
     graph.add_conditional_edges("alert", route_after_alert, {"generate": "generate", "limitation": "limitation"})
-    graph.add_conditional_edges("generate", route_after_generate, {"critique": "critique", "limitation": "limitation"})
+    graph.add_conditional_edges("generate", route_after_generate, {"enforce_critical_escalation": "enforce_critical_escalation", "limitation": "limitation"})
+    graph.add_conditional_edges("enforce_critical_escalation", route_after_enforce_critical_escalation, {"critique": "critique", "limitation": "limitation"})
     graph.add_conditional_edges("critique", route_after_critique, {"validate": "validate", "limitation": "limitation"})
     graph.add_conditional_edges("validate", route_after_validate, {"generate": "generate", END: END})
     graph.add_edge("limitation", END)

@@ -134,8 +134,9 @@ Os nós são:
 7. `analisar_informacoes`
 8. `registrar_alerta_simulado`
 9. `gerar_resposta`
-10. `criticar_resposta`
-11. `validar_seguranca`
+10. `garantir_escalonamento_critico`
+11. `criticar_resposta`
+12. `validar_seguranca`
 
 O workflow possui duas dependências de LLM, injetadas por papel e nunca escolhidas livremente por um nó:
 
@@ -144,7 +145,7 @@ O workflow possui duas dependências de LLM, injetadas por papel e nunca escolhi
 | `general_llm` | OpenAI `gpt-4.1-mini` | `interpretar_pergunta`, `analisar_informacoes`, clarificação e `criticar_resposta` | Retorna saída estruturada validada; não chama tools, não acessa dados e não toma decisões de segurança. |
 | `final_answer_llm` | Qwen3.5-4B + adapter LoRA fine-tuned | Somente `gerar_resposta` | Redige a resposta final somente a partir de fatos autorizados e fontes recuperadas. |
 
-`interpretar_pergunta` usa `general_llm` para propor intenção, condição e referências ao paciente em formato estruturado. O ID precisa corresponder ao formato aceito e é validado deterministicamente; a condição é normalizada contra o catálogo de protocolos. Dúvida, conflito ou ausência de campos mínimos resulta em clarificação, sem consulta clínica. A LLM não pode inventar identificadores, ampliar permissões ou decidir rotas de negócio.
+`interpretar_pergunta` usa `general_llm` para propor intenção, condição e referências ao paciente em formato estruturado. O ID precisa corresponder ao formato aceito e é validado deterministicamente; a condição é normalizada contra o catálogo de protocolos, incluindo remoção determinística de acentos e equivalência entre espaços, `_` e `-` (por exemplo, `puerpério` → `puerperio`). Dúvida, conflito ou ausência de campos mínimos resulta em clarificação, sem consulta clínica. A LLM não pode inventar identificadores, ampliar permissões ou decidir rotas de negócio.
 
 Uso de LLM por nó:
 
@@ -156,6 +157,7 @@ Uso de LLM por nó:
 | `analisar_informacoes` | `general_llm` sintetiza achados estruturados a partir do contexto autorizado. | Dados recuperados e regras determinísticas. |
 | `registrar_alerta_simulado` | Não usa LLM. | Serviço de criticidade e alerta. |
 | `gerar_resposta` | Exclusivamente `final_answer_llm`. | Validador de segurança e fontes. |
+| `garantir_escalonamento_critico` | Não usa LLM. Se a regra de criticidade for positiva, acrescenta deterministicamente a orientação de busca imediata de avaliação humana quando ela não estiver no rascunho. | Código; não depende da aderência do modelo ao prompt. |
 | `criticar_resposta` | `general_llm` retorna crítica estruturada de coerência, citações e linguagem indevida. | Não aprova, bloqueia, nem inicia revisão. |
 | `validar_seguranca` | Não usa LLM; recebe a crítica como evidência auxiliar. | Validador determinístico. |
 
@@ -178,7 +180,8 @@ flowchart TD
   critical -->|sim e paciente| alert[registrar_alerta_simulado] --> answer[gerar_resposta]
   critical -->|sim sem paciente| escalation[resposta de escalonamento]
   critical -->|não| answer
-  answer --> critic[criticar_resposta]
+  answer --> escalation_check[garantir_escalonamento_critico]
+  escalation_check --> critic[criticar_resposta]
   critic --> safety[validar_seguranca]
   limited --> safety
   clarify --> safety
@@ -197,7 +200,8 @@ Regras de roteamento:
 - Acesso negado: nunca chamar repositório clínico.
 - Criticidade sem paciente: escalonar, sem alerta de paciente.
 - Criticidade com paciente: persistir alerta simulado antes da resposta.
-- `gerar_resposta` sempre segue para `criticar_resposta` e então para `validar_seguranca`; a crítica é auditável e não toma decisão de rota.
+- Após `gerar_resposta`, `garantir_escalonamento_critico` preserva o rascunho não crítico. Para caso crítico, garante a orientação fixa de busca imediata de avaliação humana antes da crítica e validação; isso não depende de a LLM ter seguido o prompt.
+- `gerar_resposta` sempre segue para `garantir_escalonamento_critico`, `criticar_resposta` e então para `validar_seguranca`; a crítica é auditável e não toma decisão de rota.
 - A revisão é permitida enquanto `contador_de_revisão < MAX_RESPONSE_REVISIONS`: o grafo incrementa o contador, fornece as violações determinísticas para `gerar_resposta` e repete o ciclo. O padrão `MAX_RESPONSE_REVISIONS=1` resulta em no máximo duas gerações por execução; ao atingir o limite, uma nova reprovação segue para a mensagem segura de bloqueio.
 
 ### 8.1 Exemplos de execução
@@ -218,12 +222,13 @@ flowchart TD
   critical{regra de criticidade\n determinística}
   alert[registrar_alerta_simulado\n serviço idempotente]
   answer[gerar_resposta\n final_answer_llm]
+  escalation[garantir_escalonamento_critico\n determinístico]
   critic[criticar_resposta\n general_llm]
   safety[validar_seguranca\n determinístico]
   final[Resposta final validada\n fontes e alerta simulado]
 
   user --> interpret --> auth -->|autorizado| record --> exams --> protocol --> analysis --> critical
-  critical -->|crítico| alert --> answer --> critic --> safety -->|aprovada| final
+  critical -->|crítico| alert --> answer --> escalation --> critic --> safety -->|aprovada| final
   safety -->|revisão e contador = 0| answer
   safety -->|bloqueada ou contador = 1| blocked[mensagem segura de bloqueio]
 ~~~
@@ -239,12 +244,13 @@ flowchart TD
   analysis[analisar_informacoes\n general_llm]
   critical{regra de criticidade\n determinística}
   answer[gerar_resposta\n final_answer_llm]
+  escalation[garantir_escalonamento_critico\n determinístico]
   critic[criticar_resposta\n general_llm]
   safety[validar_seguranca\n determinístico]
   final[Resposta geral validada\n fontes do protocolo]
 
   user --> interpret --> patient -->|não| protocol --> analysis --> critical
-  critical -->|sem criticidade individual| answer --> critic --> safety -->|aprovada| final
+  critical -->|sem criticidade individual| answer --> escalation --> critic --> safety -->|aprovada| final
   safety -->|revisão e contador = 0| answer
   safety -->|bloqueada ou contador = 1| blocked[mensagem segura de bloqueio]
 ~~~
@@ -268,6 +274,7 @@ O validador determinístico é a autoridade final. Ele recebe a saída de `criti
 - bloqueia prescrição, dose, posologia e ajuste autônomo por padrões e regras explícitas;
 - permite fato recuperado apenas quando atribuído à fonte apropriada;
 - exige escalonamento humano para criticidade;
+- recebe o escalonamento crítico já garantido por um nó determinístico; continua verificando essa condição como defesa em profundidade;
 - permite reformulações até o limite configurado;
 - substitui falha final por template seguro, sem vazar rascunho, prompt ou dados internos.
 

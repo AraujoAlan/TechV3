@@ -109,6 +109,18 @@ Isso é apenas um teste local: requer bastante RAM e pode ser muito lento durant
 
 `MAX_RESPONSE_REVISIONS` define quantas gerações adicionais podem ocorrer após a resposta inicial reprovar na validação. O padrão `1` permite no máximo duas gerações e duas críticas; use `0` para limitar o fluxo a uma única geração e uma crítica.
 
+Para validar o fluxo completo sem carregar o Qwen local, configure `FINAL_ANSWER_PROVIDER=openai`. O provider usa `OPENAI_FINAL_MODEL=gpt-4.1-mini` por padrão e mantém as mesmas etapas de crítica, validação, auditoria e alerta:
+
+```bash
+FINAL_ANSWER_PROVIDER=openai \
+MAX_RESPONSE_REVISIONS=0 \
+uv run python -m app.cli \
+  --authorized-patient P-042 \
+  "Paciente P-042 com hipertensão gestacional tem exames pendentes?"
+```
+
+O padrão permanece `FINAL_ANSWER_PROVIDER=qwen`; não há fallback automático para OpenAI.
+
 ## Auditoria e consumo do OpenAI
 
 Cada execução registra no SQLite `clinical_demo.db` eventos `started`, `completed` e `failed`. Nos nós que chamam o OpenAI (`interpret`, `analyze` e `critique`), o evento `llm_usage` também armazena modelo e tokens de entrada, saída e total retornados pela API. A conclusão de `validate` inclui contagem e descrição das violações, sem armazenar o texto gerado. Os prompts e a chave da API não são gravados.

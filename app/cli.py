@@ -1,4 +1,5 @@
 import argparse
+import os
 import sqlite3
 import re
 
@@ -6,7 +7,7 @@ from dotenv import load_dotenv
 
 from app.contracts.models import RequestContext
 from app.graph.workflow import WorkflowDependencies, build_workflow
-from app.llm.factory import OpenAIGeneralLLM, QwenLoraFinalAnswerLLM
+from app.llm.factory import OpenAIFinalAnswerLLM, OpenAIGeneralLLM, QwenLoraFinalAnswerLLM
 from app.llm.fakes import FakeFinalAnswerLLM, FakeGeneralLLM
 from app.services.alert_service import SqliteAlertService
 from app.services.audit_logger import SqliteAuditLogger
@@ -16,12 +17,21 @@ from app.services.medical_repository import MedicalRepositorySqlite
 from app.services.safety_validator import DeterministicSafetyValidator
 
 
+def build_final_answer_llm():
+    provider = os.getenv("FINAL_ANSWER_PROVIDER", "qwen").lower()
+    if provider == "qwen":
+        return QwenLoraFinalAnswerLLM()
+    if provider == "openai":
+        return OpenAIFinalAnswerLLM()
+    raise ValueError("FINAL_ANSWER_PROVIDER deve ser 'qwen' ou 'openai'")
+
+
 def build_dependencies(database: str, use_fakes: bool) -> WorkflowDependencies:
     repository = MedicalRepositorySqlite.open(database)
     repository.initialize()
     connection = repository.connection
     general = FakeGeneralLLM() if use_fakes else OpenAIGeneralLLM()
-    final = FakeFinalAnswerLLM() if use_fakes else QwenLoraFinalAnswerLLM()
+    final = FakeFinalAnswerLLM() if use_fakes else build_final_answer_llm()
     return WorkflowDependencies(DemoAuthorizationService(), repository, MaternalInfantCriticalityService(), SqliteAlertService(connection), SqliteAuditLogger(connection), general, final, DeterministicSafetyValidator())
 
 
@@ -39,7 +49,7 @@ def main() -> int:
     if args.smoke_general_llm:
         print(OpenAIGeneralLLM().smoke_test()); return 0
     if args.smoke_final_answer_llm:
-        print(QwenLoraFinalAnswerLLM().smoke_test()); return 0
+        print(build_final_answer_llm().smoke_test()); return 0
     deps = build_dependencies(args.database, args.fake)
     if args.fake:
         from app.contracts.models import InterpretationResult
