@@ -25,6 +25,7 @@ dependencies = [
     "trl>=0.18.2,<=0.24.0",
     "torch>=2.4,<2.13",
     "peft>=0.20.0",
+    "bitsandbytes>=0.50.2",
 ]
 
 [dependency-groups]
