@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from app.contracts.models import Source
 from app.llm.factory import OpenAIFinalAnswerLLM, OpenAIGeneralLLM
 
 
@@ -50,8 +51,15 @@ def test_openai_final_answer_llm_returns_text_and_usage():
     llm = OpenAIFinalAnswerLLM.__new__(OpenAIFinalAnswerLLM)
     llm.client = TextClient()
     llm.model_name = "gpt-4.1-mini"
+    sources = [Source(id="src:1", title="Fonte", snippet="Fonte", kind="protocolo")]
 
-    result = llm.generate(question="Pergunta", context="[S1] Fonte.", sources=[], revision_violations=[], revision_attempt=0)
+    result = llm.generate(
+        question="Pergunta",
+        context="[S1] Fonte.",
+        sources=sources,
+        revision_violations=[],
+        revision_attempt=0,
+    )
 
     assert result == "Resposta [S1]."
     assert llm.last_usage["total_tokens"] == 14
