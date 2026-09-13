@@ -13,12 +13,24 @@ class OpenAIGeneralLLM:
         try:
             from langchain_openai import ChatOpenAI
             self.client = ChatOpenAI(model=self.model_name, temperature=0, api_key=api_key or os.getenv("OPENAI_API_KEY"))
+            self.last_usage: dict[str, str | int | None] | None = None
         except Exception as error:
             raise GeneralLLMUnavailable("Não foi possível configurar o modelo geral") from error
 
     def _invoke(self, schema, prompt: str):
         try:
-            return self.client.with_structured_output(schema).invoke(prompt)
+            response = self.client.with_structured_output(schema, include_raw=True).invoke(prompt)
+            if response["parsing_error"] is not None:
+                raise response["parsing_error"]
+            raw = response["raw"]
+            usage = raw.usage_metadata or raw.response_metadata.get("token_usage", {})
+            self.last_usage = {
+                "model": raw.response_metadata.get("model_name", self.model_name),
+                "input_tokens": usage.get("input_tokens", usage.get("prompt_tokens")),
+                "output_tokens": usage.get("output_tokens", usage.get("completion_tokens")),
+                "total_tokens": usage.get("total_tokens"),
+            }
+            return response["parsed"]
         except Exception as error:
             raise GeneralLLMUnavailable("Modelo geral indisponível ou resposta inválida") from error
 
@@ -43,8 +55,20 @@ class QwenLoraFinalAnswerLLM:
         self.base_model = base_model or os.getenv("QWEN_BASE_MODEL", "unsloth/Qwen3.5-4B")
         self.cpu_offload = os.getenv("QWEN_ENABLE_CPU_OFFLOAD", "").lower() in {"1", "true", "yes"}
         self.cpu_offload_max_memory = os.getenv("QWEN_CPU_OFFLOAD_MAX_MEMORY")
+        self.max_new_tokens = self._max_new_tokens_from_env()
         self.model = None
         self.tokenizer = None
+
+    @staticmethod
+    def _max_new_tokens_from_env() -> int:
+        value = os.getenv("QWEN_MAX_NEW_TOKENS", "256")
+        try:
+            max_new_tokens = int(value)
+        except ValueError as error:
+            raise FinalAnswerModelUnavailable("QWEN_MAX_NEW_TOKENS deve ser um inteiro positivo") from error
+        if max_new_tokens < 1:
+            raise FinalAnswerModelUnavailable("QWEN_MAX_NEW_TOKENS deve ser um inteiro positivo")
+        return max_new_tokens
 
     @staticmethod
     def quantization_config(*, cpu_offload: bool = False):
@@ -99,7 +123,7 @@ class QwenLoraFinalAnswerLLM:
         try:
             import torch
             inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-            output = self.model.generate(**inputs, max_new_tokens=256, do_sample=False)
+            output = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False)
             return self.tokenizer.decode(output[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True).strip()
         except Exception as error:
             raise FinalAnswerModelUnavailable("Falha durante geração com adapter") from error

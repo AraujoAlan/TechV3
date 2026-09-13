@@ -198,7 +198,7 @@ Regras de roteamento:
 - Criticidade sem paciente: escalonar, sem alerta de paciente.
 - Criticidade com paciente: persistir alerta simulado antes da resposta.
 - `gerar_resposta` sempre segue para `criticar_resposta` e então para `validar_seguranca`; a crítica é auditável e não toma decisão de rota.
-- Uma revisão só é permitida quando `contador_de_revisão == 0`: o grafo incrementa o contador, fornece as violações determinísticas para `gerar_resposta` e repete o ciclo. Com `contador_de_revisão == 1`, toda nova reprovação segue para a mensagem segura de bloqueio. Assim, há no máximo duas gerações por execução.
+- A revisão é permitida enquanto `contador_de_revisão < MAX_RESPONSE_REVISIONS`: o grafo incrementa o contador, fornece as violações determinísticas para `gerar_resposta` e repete o ciclo. O padrão `MAX_RESPONSE_REVISIONS=1` resulta em no máximo duas gerações por execução; ao atingir o limite, uma nova reprovação segue para a mensagem segura de bloqueio.
 
 ### 8.1 Exemplos de execução
 
@@ -268,7 +268,7 @@ O validador determinístico é a autoridade final. Ele recebe a saída de `criti
 - bloqueia prescrição, dose, posologia e ajuste autônomo por padrões e regras explícitas;
 - permite fato recuperado apenas quando atribuído à fonte apropriada;
 - exige escalonamento humano para criticidade;
-- permite uma única reformulação;
+- permite reformulações até o limite configurado;
 - substitui falha final por template seguro, sem vazar rascunho, prompt ou dados internos.
 
 O validador oferece controles demonstráveis, não garantia de validação semântica total de toda frase livre. Essa limitação deve constar no README e no relatório técnico.

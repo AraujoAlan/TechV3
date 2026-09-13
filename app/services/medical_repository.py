@@ -24,6 +24,7 @@ class MedicalRepositorySqlite:
                 CREATE TABLE IF NOT EXISTS protocols (condition TEXT PRIMARY KEY, summary TEXT NOT NULL, version TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS alerts (alert_id TEXT PRIMARY KEY, audit_id TEXT NOT NULL, patient_id TEXT, rule_code TEXT NOT NULL, rule_version TEXT NOT NULL, reason TEXT NOT NULL, idempotency_key TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS audit_events (event_id TEXT PRIMARY KEY, audit_id TEXT NOT NULL, node TEXT NOT NULL, event TEXT NOT NULL, details TEXT NOT NULL, idempotency_key TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS idx_audit_events_audit_created ON audit_events(audit_id, created_at);
             """)
             self.connection.executemany("INSERT OR IGNORE INTO patients VALUES (?, ?, ?)", [
                 ("P-042", "Gestante sintética com hipertensão gestacional e sinais de alarme documentados.", "v1"),

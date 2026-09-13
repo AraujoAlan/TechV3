@@ -1,3 +1,4 @@
+import os
 import uuid
 from dataclasses import dataclass
 
@@ -9,6 +10,17 @@ from app.contracts.ports import AlertService, AuditLogger, AuthorizationService,
 from .state import WorkflowState
 
 SAFE_LIMITATION = "Não foi possível fornecer uma resposta clínica segura nesta execução. Procure avaliação de um profissional de saúde."
+
+
+def max_response_revisions() -> int:
+    value = os.getenv("MAX_RESPONSE_REVISIONS", "1")
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise ValueError("MAX_RESPONSE_REVISIONS deve ser um inteiro maior ou igual a zero") from error
+    if result < 0:
+        raise ValueError("MAX_RESPONSE_REVISIONS deve ser um inteiro maior ou igual a zero")
+    return result
 
 
 @dataclass(frozen=True)
@@ -34,17 +46,36 @@ def _sources(*items) -> list[Source]:
 
 
 def build_workflow(deps: WorkflowDependencies):
+    max_revisions = max_response_revisions()
+
     def audited(name, node):
         def invoke(state: WorkflowState):
+            attempt = state.get("revision_count", 0)
+            audit_id = state.get("audit_id")
             try:
+                if audit_id:
+                    deps.audit.record_event(audit_id=audit_id, event="started", node=name, details={}, idempotency_key=f"{audit_id}:{name}:{attempt}:started")
                 result = node(state)
-                if state.get("audit_id"):
-                    deps.audit.record_event(audit_id=state["audit_id"], event="completed", node=name, details={"error_code": result.get("error_code")}, idempotency_key=f"{state['audit_id']}:{name}:completed")
+                audit_id = state.get("audit_id") or result.get("audit_id")
+                if audit_id:
+                    if name in {"interpret", "analyze", "critique"}:
+                        usage = getattr(deps.general_llm, "last_usage", None)
+                        if usage:
+                            deps.audit.record_event(audit_id=audit_id, event="llm_usage", node=name, details=usage, idempotency_key=f"{audit_id}:{name}:{attempt}:llm_usage")
+                    details = {"error_code": result.get("error_code")}
+                    if name == "validate":
+                        violations = result.get("violations", [])
+                        details.update({
+                            "revision_count": result.get("revision_count", attempt),
+                            "violation_count": len(violations),
+                            "violations": " | ".join(violations),
+                        })
+                    deps.audit.record_event(audit_id=audit_id, event="completed", node=name, details=details, idempotency_key=f"{audit_id}:{name}:{attempt}:completed")
                 return result
             except WorkflowServiceError as error:
-                if state.get("audit_id"):
+                if audit_id:
                     try:
-                        deps.audit.record_event(audit_id=state["audit_id"], event="failed", node=name, details={"error_code": type(error).__name__}, idempotency_key=f"{state['audit_id']}:{name}:failed")
+                        deps.audit.record_event(audit_id=audit_id, event="failed", node=name, details={"error_code": type(error).__name__}, idempotency_key=f"{audit_id}:{name}:{attempt}:failed")
                     except WorkflowServiceError:
                         pass
                 return {"error_code": type(error).__name__, "final_answer": SAFE_LIMITATION}
@@ -98,7 +129,8 @@ def build_workflow(deps: WorkflowDependencies):
     def validate(state: WorkflowState):
         validation = deps.validator.validate(answer=state.get("draft", state.get("final_answer", "")), sources=state.get("sources", []), has_individual_context=bool(state.get("record")), is_critical=state.get("criticality", CriticalityResult(is_critical=False, rule_version="v1")).is_critical, critique=state.get("critique", CritiqueResult()))
         if validation.approved: return {"final_answer": state["draft"], "violations": []}
-        if validation.requires_revision and state["revision_count"] == 0: return {"violations": validation.violations, "revision_count": 1}
+        if validation.requires_revision and state["revision_count"] < max_revisions:
+            return {"violations": validation.violations, "revision_count": state["revision_count"] + 1}
         return {"final_answer": validation.safe_message or SAFE_LIMITATION, "violations": validation.violations}
 
     def limitation(state: WorkflowState):
@@ -120,7 +152,7 @@ def build_workflow(deps: WorkflowDependencies):
         if critical: return "limitation"
         return "generate"
     def route_after_validate(state: WorkflowState):
-        return "generate" if state.get("revision_count") == 1 and not state.get("final_answer") else END
+        return "generate" if state.get("revision_count", 0) <= max_revisions and not state.get("final_answer") else END
     def route_after_alert(state: WorkflowState): return "limitation" if state.get("error_code") else "generate"
     def route_after_generate(state: WorkflowState): return "limitation" if state.get("error_code") else "critique"
     def route_after_critique(state: WorkflowState): return "limitation" if state.get("error_code") else "validate"

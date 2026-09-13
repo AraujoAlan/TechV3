@@ -51,6 +51,8 @@ OPENAI_API_KEY=sua_chave_openai
 QWEN_LORA_ADAPTER_PATH=/caminho/absoluto/para/modelos/lora_model
 QWEN_BASE_MODEL=unsloth/Qwen3.5-4B
 QWEN_ENABLE_CPU_OFFLOAD=false
+QWEN_MAX_NEW_TOKENS=256
+MAX_RESPONSE_REVISIONS=1
 ```
 
 Não compartilhe nem versione a chave OpenAI. Após baixar o adapter na seção seguinte, obtenha um caminho absoluto portável com:
@@ -97,10 +99,41 @@ Em uma GPU pequena, é possível testar o carregamento híbrido, mantendo módul
 ```bash
 QWEN_ENABLE_CPU_OFFLOAD=true \
 QWEN_CPU_OFFLOAD_MAX_MEMORY=12GiB \
+QWEN_MAX_NEW_TOKENS=64 \
 uv run python -m app.cli --smoke-final-answer-llm
 ```
 
 Isso é apenas um teste local: requer bastante RAM e pode ser muito lento durante a geração. Mantenha a variável como `false` para a execução normal em uma GPU compatível.
+
+`QWEN_MAX_NEW_TOKENS` limita o tamanho da resposta final e usa `256` como padrão. Para validar geração em uma máquina com offload CPU, prefira `32` ou `64`; em uma GPU com VRAM suficiente, `256` oferece mais espaço para uma resposta completa.
+
+`MAX_RESPONSE_REVISIONS` define quantas gerações adicionais podem ocorrer após a resposta inicial reprovar na validação. O padrão `1` permite no máximo duas gerações e duas críticas; use `0` para limitar o fluxo a uma única geração e uma crítica.
+
+## Auditoria e consumo do OpenAI
+
+Cada execução registra no SQLite `clinical_demo.db` eventos `started`, `completed` e `failed`. Nos nós que chamam o OpenAI (`interpret`, `analyze` e `critique`), o evento `llm_usage` também armazena modelo e tokens de entrada, saída e total retornados pela API. A conclusão de `validate` inclui contagem e descrição das violações, sem armazenar o texto gerado. Os prompts e a chave da API não são gravados.
+
+Para consultar a última execução:
+
+```bash
+uv run python - <<'PY'
+import json
+import sqlite3
+
+with sqlite3.connect("clinical_demo.db") as connection:
+    rows = connection.execute("""
+        SELECT node, event, details, created_at
+        FROM audit_events
+        WHERE audit_id = (
+            SELECT audit_id FROM audit_events ORDER BY created_at DESC LIMIT 1
+        )
+        ORDER BY created_at
+    """).fetchall()
+
+for node, event, details, created_at in rows:
+    print(created_at, node, event, json.loads(details))
+PY
+```
 
 O fluxo novo não possui fallback de modelo: se o adapter ou modelo-base não estiver disponível, o comando falha de modo seguro. `--fake` usa LLMs determinísticas apenas para desenvolvimento e testes; `python main.py --base-legacy` é o protótipo ReAct anterior e não substitui o adapter fine-tuned.
 

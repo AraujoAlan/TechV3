@@ -21,7 +21,7 @@ O escopo é a demonstração com dados sintéticos. Não define API HTTP, autent
 - Nenhuma implementação deve escrever ou retornar dados reais de paciente.
 - O grafo não conhece SQL, tabelas, detalhes de LangChain, paths de modelo ou formato do log.
 - `GeneralLLM` não chama tools, não acessa o repositório e não decide autorização, rotas, criticidade, alertas ou aprovação da resposta.
-- A rota de revisão é controlada pelo grafo, não por uma LLM: começa com `contador_de_revisão = 0`, permite uma única nova geração e bloqueia qualquer nova reprovação.
+- A rota de revisão é controlada pelo grafo, não por uma LLM: começa com `contador_de_revisão = 0` e permite até `MAX_RESPONSE_REVISIONS` novas gerações (padrão `1`), bloqueando reprovações após esse limite.
 
 ## 3. Modelos compartilhados
 
@@ -246,8 +246,8 @@ class SafetyValidator(Protocol):
 | `GeneralLLM.interpret` indisponível, recusa ou schema inválido | `GeneralLLMUnavailable` ou erro de validação | Não consulta repositório; produz clarificação segura. |
 | `GeneralLLM.analyze` ou `GeneralLLM.critique` indisponível, recusa ou schema inválido | `GeneralLLMUnavailable` ou erro de validação | Audita e encerra com limitação segura; não ignora o nó. |
 | `FinalAnswerLLM` indisponível | `FinalAnswerModelUnavailable` | Não usa fallback silencioso; encerra com limitação segura. |
-| Resposta inválida na primeira tentativa | `ValidationResult(approved=False, requires_revision=True)` e `contador_de_revisão == 0` | Incrementa o contador, passa as violações determinísticas a `FinalAnswerLLM.generate` e faz uma única reformulação. |
-| Resposta inválida após revisão ou bloqueada | `ValidationResult(approved=False)` e `contador_de_revisão == 1`, ou bloqueio imediato | Entrega template seguro de bloqueio, sem nova geração. |
+| Resposta inválida dentro do limite | `ValidationResult(approved=False, requires_revision=True)` e `contador_de_revisão < MAX_RESPONSE_REVISIONS` | Incrementa o contador e passa as violações determinísticas a `FinalAnswerLLM.generate`. |
+| Resposta inválida após o limite ou bloqueada | `ValidationResult(approved=False)` e `contador_de_revisão >= MAX_RESPONSE_REVISIONS`, ou bloqueio imediato | Entrega template seguro de bloqueio, sem nova geração. |
 
 Exceções de infraestrutura devem ser específicas, como `RepositoryUnavailable`, `AlertUnavailable`, `GeneralLLMUnavailable` e `FinalAnswerModelUnavailable`; não usar `None` para representar indisponibilidade.
 
@@ -305,7 +305,7 @@ Antes de integrar componentes reais, confirmar:
 - [ ] O adapter real implementa `FinalAnswerLLM.generate` e não faz tool calling.
 - [ ] A execução real prova que GPT-4.1 mini está disponível para os nós permitidos.
 - [ ] A execução real prova que o adapter Qwen3.5-4B + LoRA foi carregado.
-- [ ] A rota permite apenas uma revisão: `contador_de_revisão` inicia em zero, passa a um antes da segunda geração e bloqueia após nova reprovação.
+- [ ] A rota respeita `MAX_RESPONSE_REVISIONS`: `contador_de_revisão` inicia em zero e bloqueia após atingir o limite configurado.
 - [ ] Alertas usam a mesma `idempotency_key` em reexecuções.
 - [ ] Auditoria registra o resumo minimizado de `criticar_resposta`, sem dados sensíveis ou rascunhos bloqueados.
 - [ ] O teste integrado cobre autorização, fontes, validação e alerta crítico.

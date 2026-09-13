@@ -1,4 +1,6 @@
 from app.llm.factory import QwenLoraFinalAnswerLLM
+from app.contracts.errors import FinalAnswerModelUnavailable
+import pytest
 
 
 def test_qwen_loader_uses_4bit_qlora_configuration():
@@ -71,3 +73,19 @@ def test_qwen_loader_reads_cpu_offload_environment_flag(monkeypatch):
 
     assert loader.cpu_offload is True
     assert loader.cpu_offload_max_memory == "12GiB"
+
+
+def test_qwen_loader_reads_max_new_tokens_from_environment(monkeypatch):
+    monkeypatch.setenv("QWEN_MAX_NEW_TOKENS", "64")
+
+    loader = QwenLoraFinalAnswerLLM(adapter_path="/tmp/adapter")
+
+    assert loader.max_new_tokens == 64
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "not-a-number"])
+def test_qwen_loader_rejects_invalid_max_new_tokens(monkeypatch, value):
+    monkeypatch.setenv("QWEN_MAX_NEW_TOKENS", value)
+
+    with pytest.raises(FinalAnswerModelUnavailable, match="inteiro positivo"):
+        QwenLoraFinalAnswerLLM(adapter_path="/tmp/adapter")
