@@ -38,4 +38,4 @@ Os smoke tests acessam integrações reais e são separados da suíte determiní
 - Dose, posologia, prescrição e ajuste autônomo são bloqueados por regras explícitas.
 - Casos críticos exigem escalonamento humano; com paciente autorizado, um alerta simulado idempotente é registrado antes da resposta.
 
-O validador é um controle demonstrável, não uma garantia de validação semântica absoluta de texto livre. Detalhes de arquitetura estão em [docs/design-doc-langgraph.md](docs/design-doc-langgraph.md) e o contrato em [docs/langgraph-backend-contract.md](docs/langgraph-backend-contract.md).
+O validador é um controle demonstrável, não uma garantia de validação semântica absoluta de texto livre. Consulte o [guia de configuração e execução](docs/guia-execucao-local.md), a [arquitetura](docs/design-doc-langgraph.md) e o [contrato](docs/langgraph-backend-contract.md).
