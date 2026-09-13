@@ -2,6 +2,8 @@ import argparse
 import sqlite3
 import re
 
+from dotenv import load_dotenv
+
 from app.contracts.models import RequestContext
 from app.graph.workflow import WorkflowDependencies, build_workflow
 from app.llm.factory import OpenAIGeneralLLM, QwenLoraFinalAnswerLLM
@@ -24,6 +26,8 @@ def build_dependencies(database: str, use_fakes: bool) -> WorkflowDependencies:
 
 
 def main() -> int:
+    # Variáveis exportadas no shell prevalecem sobre o arquivo local.
+    load_dotenv(override=False)
     parser = argparse.ArgumentParser(description="Demo sintética do workflow LangGraph")
     parser.add_argument("question", nargs="?", default="Quais sinais exigem atenção na hipertensão gestacional?")
     parser.add_argument("--authorized-patient", action="append", default=[])
