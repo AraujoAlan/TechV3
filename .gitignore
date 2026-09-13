@@ -1,6 +1,7 @@
 # Segredos
 .env
 .env.local
+clinical_demo.db
 
 # Dados derivados do MedPT (interacao real paciente-medico, nao versionar)
 data/
