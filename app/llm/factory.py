@@ -41,11 +41,13 @@ class QwenLoraFinalAnswerLLM:
     def __init__(self, adapter_path: str | None = None, base_model: str | None = None):
         self.adapter_path = adapter_path or os.getenv("QWEN_LORA_ADAPTER_PATH")
         self.base_model = base_model or os.getenv("QWEN_BASE_MODEL", "unsloth/Qwen3.5-4B")
+        self.cpu_offload = os.getenv("QWEN_ENABLE_CPU_OFFLOAD", "").lower() in {"1", "true", "yes"}
+        self.cpu_offload_max_memory = os.getenv("QWEN_CPU_OFFLOAD_MAX_MEMORY")
         self.model = None
         self.tokenizer = None
 
     @staticmethod
-    def quantization_config():
+    def quantization_config(*, cpu_offload: bool = False):
         """Configuração QLoRA compatível com o carregamento 4-bit do treino."""
         import torch
         from transformers import BitsAndBytesConfig
@@ -55,6 +57,9 @@ class QwenLoraFinalAnswerLLM:
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
             bnb_4bit_compute_dtype=torch.float16,
+            # Para módulos que o device_map levar à CPU, BitsAndBytes mantém
+            # os pesos em FP32. Isso é opt-in porque aumenta RAM e latência.
+            llm_int8_enable_fp32_cpu_offload=cpu_offload,
         )
 
     def load(self) -> None:
@@ -69,10 +74,19 @@ class QwenLoraFinalAnswerLLM:
             # pesos do adapter aos módulos corretos.
             from transformers import AutoModelForImageTextToText, AutoTokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.base_model)
+            model_kwargs = {
+                "device_map": "auto",
+                "quantization_config": self.quantization_config(cpu_offload=self.cpu_offload),
+            }
+            # Sem um teto de RAM explícito, Accelerate pode descarregar módulos
+            # para disco. PEFT não consegue aplicar este adapter 4-bit a tensores
+            # meta que permanecem no disco; para o teste híbrido, use só GPU+CPU.
+            if self.cpu_offload and self.cpu_offload_max_memory:
+                model_kwargs["max_memory"] = {"cpu": self.cpu_offload_max_memory}
+
             model = AutoModelForImageTextToText.from_pretrained(
                 self.base_model,
-                device_map="auto",
-                quantization_config=self.quantization_config(),
+                **model_kwargs,
             )
             self.model = PeftModel.from_pretrained(model, self.adapter_path)
             self.model.eval()

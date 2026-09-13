@@ -50,6 +50,7 @@ Conteúdo esperado:
 OPENAI_API_KEY=sua_chave_openai
 QWEN_LORA_ADAPTER_PATH=/caminho/absoluto/para/modelos/lora_model
 QWEN_BASE_MODEL=unsloth/Qwen3.5-4B
+QWEN_ENABLE_CPU_OFFLOAD=false
 ```
 
 Não compartilhe nem versione a chave OpenAI. Após baixar o adapter na seção seguinte, obtenha um caminho absoluto portável com:
@@ -90,6 +91,16 @@ uv run python -m app.cli --smoke-final-answer-llm
 ```
 
 `--smoke-general-llm` confirma que `OPENAI_API_KEY` permite ao `gpt-4.1-mini` retornar uma interpretação estruturada. `--smoke-final-answer-llm` verifica somente a configuração e o carregamento do tokenizer, do modelo-base Qwen e do adapter LoRA. Nenhum dos dois executa o `StateGraph`, consulta SQLite ou gera uma resposta clínica.
+
+Em uma GPU pequena, é possível testar o carregamento híbrido, mantendo módulos que não couberem na GPU em RAM/FP32:
+
+```bash
+QWEN_ENABLE_CPU_OFFLOAD=true \
+QWEN_CPU_OFFLOAD_MAX_MEMORY=12GiB \
+uv run python -m app.cli --smoke-final-answer-llm
+```
+
+Isso é apenas um teste local: requer bastante RAM e pode ser muito lento durante a geração. Mantenha a variável como `false` para a execução normal em uma GPU compatível.
 
 O fluxo novo não possui fallback de modelo: se o adapter ou modelo-base não estiver disponível, o comando falha de modo seguro. `--fake` usa LLMs determinísticas apenas para desenvolvimento e testes; `python main.py --base-legacy` é o protótipo ReAct anterior e não substitui o adapter fine-tuned.
 
