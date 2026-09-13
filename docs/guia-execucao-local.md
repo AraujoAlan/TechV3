@@ -190,3 +190,32 @@ Em caso crítico, `garantir_escalonamento_critico` acrescenta deterministicament
 | Adapter não encontrado | Refaça o download e confira `adapter_config.json`. |
 | Erro de memória/CUDA | Use `--fake` localmente ou mova o smoke test final para uma GPU maior. |
 | `clinical_demo.db` apareceu | É banco SQLite derivado da demonstração e já está no `.gitignore`. |
+
+## 9. API HTTP e frontend
+
+A API FastAPI expõe o mesmo workflow do CLI sem duplicar regras de domínio.
+
+```bash
+# Terminal 1 — API com LLMs fake (sem OpenAI/Qwen)
+API_USE_FAKES=true \
+DEMO_AUTHORIZED_PATIENT_IDS=P-042 \
+uv run uvicorn app.api.app:app --reload --port 8000
+
+# Terminal 2 — frontend contra a API real
+cd frontend
+echo 'VITE_USE_MOCK=false' > .env.local
+npm run dev
+```
+
+Endpoints:
+
+- `GET /api/health` → `{ "status": "ok", "mode": "demo" }`
+- `POST /api/chat` → JSON com `audit_id`, `outcome`, `answer`, `sources`, `alert`
+
+Autorização e pacientes permitidos vêm só do servidor (`DEMO_REQUESTER_ID`,
+`DEMO_AUTHORIZED_PATIENT_IDS`). O navegador envia apenas `question` e, opcionalmente,
+`conversation_id` para correlação.
+
+Com `FINAL_ANSWER_PROVIDER=openai` e `API_USE_FAKES=false`, a API usa o fluxo real
+sem carregar Qwen. Em produção, faça `npm run build` em `frontend/` e suba o
+uvicorn: o `frontend/dist` é servido depois das rotas `/api/*`.

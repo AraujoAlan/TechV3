@@ -1,158 +1,101 @@
 import { createId } from '../lib/id'
 import { sleep } from '../lib/time'
-import type { ChatRequest, Source, StreamEvent } from './types'
+import type { ChatRequest, ChatResponse, Source } from './types'
 
 /**
- * Backend falso que emite exatamente os mesmos `StreamEvent` do FastAPI real.
+ * Backend falso que devolve o mesmo `ChatResponse` da API real.
  *
- * Serve para desenvolver a UI e gravar a demo antes da API existir. Quando o
- * backend subir, basta `VITE_USE_MOCK=false` — nenhum componente muda.
+ * Mantém a UI utilizável sem o FastAPI. Com `VITE_USE_MOCK=false` o caminho
+ * de rede assume o contrato JSON.
  */
-export async function* mockStreamChat(
+export async function mockSendChat(
   request: ChatRequest,
   signal?: AbortSignal,
-): AsyncGenerator<StreamEvent> {
-  const question = request.messages.at(-1)?.content ?? ''
-  const scenario = pickScenario(question)
-
-  await sleep(280, signal)
-
-  for (const tool of scenario.tools) {
-    const toolId = createId('tool')
-    yield { type: 'tool_start', id: toolId, name: tool.name, input: tool.input }
-    await sleep(520, signal)
-    yield { type: 'tool_end', id: toolId, output: tool.output }
-    await sleep(180, signal)
+): Promise<ChatResponse> {
+  await sleep(420, signal)
+  const scenario = pickScenario(request.question)
+  return {
+    audit_id: createId('audit'),
+    outcome: scenario.outcome,
+    answer: scenario.answer,
+    sources: scenario.sources,
+    alert: scenario.alert,
   }
-
-  // Emite palavra a palavra para reproduzir a sensação do token streaming.
-  for (const chunk of chunkText(scenario.answer)) {
-    yield { type: 'token', content: chunk }
-    await sleep(18, signal)
-  }
-
-  if (scenario.sources.length > 0) {
-    yield { type: 'sources', sources: scenario.sources }
-  }
-
-  yield { type: 'done', messageId: createId('msg'), conversationId: request.conversationId }
 }
 
 interface Scenario {
-  tools: Array<{ name: string; input: Record<string, unknown>; output: string }>
+  outcome: ChatResponse['outcome']
   answer: string
   sources: Source[]
+  alert: ChatResponse['alert']
 }
 
-/** Escolhe a resposta pelas palavras-chave, espelhando as tools do `main.py`. */
 function pickScenario(question: string): Scenario {
   const text = question.toLowerCase()
-  const patientId = question.match(/\b\d{4,}\b/)?.[0] ?? '12345'
 
-  if (text.includes('exame')) {
+  if (text.includes('p-999')) {
     return {
-      tools: [
-        {
-          name: 'verificar_exames_pendentes',
-          input: { paciente_id: patientId },
-          output: '2 exames pendentes: Hemoglobina glicada (solicitado 12/03), Ultrassom transvaginal (solicitado 20/03).',
-        },
-      ],
+      outcome: 'limited',
       answer:
-        `A paciente ${patientId} tem **2 exames pendentes**:\n\n` +
-        '1. Hemoglobina glicada — solicitado em 12/03, sem coleta registrada.\n' +
-        '2. Ultrassom transvaginal — solicitado em 20/03, sem agendamento.\n\n' +
-        'O ultrassom está pendente há mais tempo que o previsto no protocolo de acompanhamento. ' +
-        'Vale confirmar o agendamento antes da próxima consulta.',
-      sources: [
-        {
-          id: createId('src'),
-          title: `Prontuário ${patientId} — Solicitações`,
-          kind: 'exame',
-          snippet: 'Hemoglobina glicada (12/03) · Ultrassom transvaginal (20/03) — ambos sem resultado.',
-        },
-      ],
+        'Não foi possível fornecer uma resposta clínica segura nesta execução. Procure avaliação de um profissional de saúde.',
+      sources: [],
+      alert: null,
     }
   }
 
-  if (text.includes('protocolo') || text.includes('conduta') || text.includes('tratamento')) {
+  if (text.includes('exame') || text.includes('p-042') || text.includes('hipertens')) {
     return {
-      tools: [
-        {
-          name: 'consultar_protocolo',
-          input: { condicao: extractCondition(text) },
-          output: 'Protocolo interno v2.1 localizado — 4 etapas de conduta.',
-        },
-      ],
+      outcome: 'completed',
       answer:
-        'Segundo o protocolo interno do hospital, a conduta se organiza em quatro etapas:\n\n' +
-        '1. **Confirmação diagnóstica** com exame clínico e laboratorial.\n' +
-        '2. **Estratificação de risco** conforme idade, histórico e comorbidades.\n' +
-        '3. **Conduta inicial** de acordo com a faixa de risco identificada.\n' +
-        '4. **Reavaliação** em 30 dias, com ajuste conforme resposta.\n\n' +
-        '⚠️ Esta é uma orientação baseada em protocolo. A prescrição depende da sua avaliação clínica.',
+        'Com base no prontuário sintético, a paciente P-042 possui exame pendente de avaliação de pressão grave [S1][S2]. ' +
+        'Há sinais de alarme no contexto de hipertensão gestacional [S3]. Procure avaliação humana imediata.',
       sources: [
         {
-          id: createId('src'),
-          title: 'Protocolo Interno — Ginecologia v2.1',
-          kind: 'protocolo',
-          snippet: 'Seção 3: estratificação de risco e conduta inicial por faixa.',
-        },
-      ],
-    }
-  }
-
-  if (text.includes('prontuário') || text.includes('prontuario') || text.includes('paciente')) {
-    return {
-      tools: [
-        {
-          name: 'buscar_prontuario',
-          input: { paciente_id: patientId },
-          output: 'Prontuário encontrado: 34 anos, G2P1A0, sem alergias registradas.',
-        },
-        {
-          name: 'verificar_exames_pendentes',
-          input: { paciente_id: patientId },
-          output: '2 exames pendentes.',
-        },
-      ],
-      answer:
-        `**Paciente ${patientId}** — 34 anos, G2P1A0, sem alergias registradas.\n\n` +
-        '**Histórico recente:** acompanhamento de rotina, última consulta em 08/02. ' +
-        'Queixa registrada de ciclo irregular nos últimos três meses.\n\n' +
-        '**Pendências:** 2 exames solicitados e ainda sem resultado.\n\n' +
-        'Quer que eu detalhe os exames pendentes ou o protocolo de investigação para ciclo irregular?',
-      sources: [
-        {
-          id: createId('src'),
-          title: `Prontuário Eletrônico ${patientId}`,
+          id: 'record:P-042:v1',
+          title: 'Prontuário sintético',
           kind: 'prontuario',
-          snippet: 'Última atualização em 08/02 — consulta de rotina.',
+          snippet: 'Gestante sintética com hipertensão gestacional e sinais de alarme documentados.',
+        },
+        {
+          id: 'exam:EX-042-1:v1',
+          title: 'Exame sintético',
+          kind: 'exame',
+          snippet: 'Avaliação de pressão grave pendente',
+        },
+        {
+          id: 'protocol:hipertensao-gestacional:v1',
+          title: 'Protocolo sintético',
+          kind: 'protocolo',
+          snippet: 'Sinais de alarme exigem avaliação humana imediata.',
         },
       ],
+      alert: { status: 'simulated_recorded' },
+    }
+  }
+
+  if (text.includes('protocolo') || text.includes('conduta') || text.includes('puerper')) {
+    return {
+      outcome: 'completed',
+      answer:
+        'Segundo o protocolo sintético de acompanhamento no puerpério, a reavaliação clínica periódica é recomendada [S1]. ' +
+        'Esta é uma orientação de apoio — a conduta depende da sua avaliação.',
+      sources: [
+        {
+          id: 'protocol:puerperio:v1',
+          title: 'Protocolo sintético',
+          kind: 'protocolo',
+          snippet: 'Protocolo sintético de acompanhamento no puerpério.',
+        },
+      ],
+      alert: null,
     }
   }
 
   return {
-    tools: [],
+    outcome: 'limited',
     answer:
-      'Consigo ajudar com consulta a prontuários, exames pendentes e protocolos internos do hospital.\n\n' +
-      'Você pode perguntar, por exemplo:\n\n' +
-      '• "Mostre o prontuário da paciente 12345"\n' +
-      '• "Quais exames estão pendentes para a 12345?"\n' +
-      '• "Qual o protocolo para ciclo irregular?"\n\n' +
-      'Lembrando que sou um apoio à decisão — não substituo sua avaliação clínica.',
+      'Não foi possível fornecer uma resposta clínica segura nesta execução. Procure avaliação de um profissional de saúde.',
     sources: [],
+    alert: null,
   }
-}
-
-/** Heurística boba, só para o mock devolver um input de tool plausível. */
-function extractCondition(text: string): string {
-  const known = ['hipertensão', 'diabetes', 'ciclo irregular', 'endometriose', 'gestação']
-  return known.find((condition) => text.includes(condition)) ?? 'consulta geral'
-}
-
-/** Quebra o texto preservando os espaços, para o stream não colar as palavras. */
-function chunkText(text: string): string[] {
-  return text.match(/\S+\s*/g) ?? []
 }

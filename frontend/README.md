@@ -14,10 +14,6 @@ processo só.
 | Node | 22 (`.nvmrc`) | Vite 8 exige `>=20.19`. Rode `nvm use` antes de instalar. |
 | Lint | oxlint | Já vem no scaffold; roda em milissegundos. |
 
-Por que **não** Next.js: o valor dele (Server Components, Route Handlers, SSR)
-duplicaria a camada que o backend Python já é. Sobraria um servidor Node só
-para fazer proxy do FastAPI — um salto a mais, sem ganho.
-
 ## Rodando
 
 ```bash
@@ -26,6 +22,9 @@ npm install
 cp .env.example .env.local
 npm run dev      # http://localhost:5173
 ```
+
+Com a API no ar (`uv run uvicorn app.api.app:app --reload --port 8000`) e
+`VITE_USE_MOCK=false`, o Vite faz proxy de `/api` para `localhost:8000`.
 
 Scripts: `dev`, `build` (typecheck + bundle), `preview`, `lint`.
 
@@ -36,18 +35,17 @@ A separação pedida é rígida: **nada em `ui/` importa `fetch`**.
 ```
 src/
 ├── api/          # tudo que fala com o backend
-│   ├── types.ts      # contrato (Message, StreamEvent, ChatRequest…)
+│   ├── types.ts      # contrato (Message, ChatRequest, ChatResponse)
 │   ├── config.ts     # base URL e chave do mock
-│   ├── chat.ts       # streamChat() — POST + SSE
-│   ├── sse.ts        # parser de Server-Sent Events sobre fetch
-│   ├── mock.ts       # backend falso, mesmos eventos do real
+│   ├── chat.ts       # sendChat() — POST JSON
+│   ├── mock.ts       # backend falso, mesmo ChatResponse
 │   ├── health.ts     # indicador de API no ar
 │   ├── errors.ts     # ApiError + mensagens para o médico
 │   └── index.ts      # barrel público do módulo
 │
 ├── ui/           # componentes React, sem conhecimento de rede
 │   ├── chat/         # ChatView, MessageList, MessageBubble, Composer,
-│   │                 # ToolTrace, SourceList, EmptyState
+│   │                 # SourceList, EmptyState
 │   ├── layout/       # AppShell, Header
 │   └── primitives/   # RichText (markdown mínimo), icons
 │
@@ -58,34 +56,26 @@ src/
 
 ## Contrato da API
 
-A especificação completa do que o backend precisa expor está em
-[`CONTRATO.md`](CONTRATO.md): corpo da requisição, os seis eventos do stream
-SSE, tratamento de erro e checklist de aceite. Em código, a fonte da verdade é
-[`src/api/types.ts`](src/api/types.ts).
+A especificação completa está em [`CONTRATO.md`](CONTRATO.md). Em código, a
+fonte da verdade é [`src/api/types.ts`](src/api/types.ts).
 
-Resumo: `POST /api/chat` recebe o histórico em JSON e responde
-`text/event-stream`; `GET /api/health` alimenta o indicador do cabeçalho.
+Resumo: `POST /api/chat` recebe `{ question, conversation_id? }` e responde
+JSON com `answer`, `sources`, `outcome` e `alert`; `GET /api/health` alimenta
+o indicador do cabeçalho.
 
-Enquanto a API não existir, `VITE_USE_MOCK=true` mantém a UI funcionando com
-`src/api/mock.ts` — mesmo formato de eventos, streaming incluído. Para plugar o
-backend real basta `VITE_USE_MOCK=false`; nenhum componente muda.
+`VITE_USE_MOCK=true` mantém a UI com o mock local. Para a API real:
+`VITE_USE_MOCK=false`.
 
 ## Requisitos da Fase 3 refletidos na UI
 
 - **Explainability** — `SourceList` mostra as fontes citadas em cada resposta.
-- **Rastreabilidade** — `ToolTrace` expõe cada tool executada pelo agent, com
-  entrada, saída e status.
+- **Auditoria segura** — alerta simulado quando o backend registra
+  `simulated_recorded`; sem expor trilha interna de nós ou rascunhos.
 - **Limites de atuação** — aviso fixo no composer: apoio à decisão, não
   prescreve nem substitui a avaliação clínica.
 
 ## Servindo pelo FastAPI
 
-```python
-from fastapi.staticfiles import StaticFiles
-
-# depois de registrar as rotas /api/*
-app.mount("/", StaticFiles(directory="frontend/dist", html=True), name="frontend")
-```
-
-Com isso o `/api` do proxy de desenvolvimento (`vite.config.ts`) e o caminho de
-produção viram o mesmo — não há CORS para resolver em lugar nenhum.
+As rotas `/api/*` são registradas primeiro; em seguida o `frontend/dist` é
+montado. Em desenvolvimento o proxy do Vite (`vite.config.ts`) aponta `/api`
+para `http://localhost:8000` — sem CORS.

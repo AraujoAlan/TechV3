@@ -4,7 +4,6 @@ import { formatTime } from '../../lib/time'
 import { AlertIcon } from '../primitives/icons'
 import { RichText } from '../primitives/RichText'
 import { SourceList } from './SourceList'
-import { ToolTrace } from './ToolTrace'
 
 /**
  * Uma mensagem da conversa.
@@ -47,10 +46,6 @@ function AssistantMessage({ message }: { message: Message }): JSX.Element {
       <Avatar />
 
       <div className="min-w-0 flex-1 pt-0.5">
-        {message.toolCalls && message.toolCalls.length > 0 && (
-          <ToolTrace calls={message.toolCalls} />
-        )}
-
         {waiting ? (
           <ThinkingDots />
         ) : (
@@ -60,6 +55,12 @@ function AssistantMessage({ message }: { message: Message }): JSX.Element {
         )}
 
         {message.sources && <SourceList sources={message.sources} />}
+
+        {message.alert?.status === 'simulated_recorded' && (
+          <p className="mt-2 text-xs text-muted" role="status">
+            Alerta clínico simulado registrado para auditoria da demonstração.
+          </p>
+        )}
 
         {message.error && (
           <p className="mt-2 flex items-start gap-1.5 text-xs text-danger">
@@ -83,7 +84,7 @@ function Avatar(): JSX.Element {
   )
 }
 
-/** Placeholder enquanto o primeiro token não chega. */
+/** Placeholder enquanto a API ainda não devolveu a resposta. */
 function ThinkingDots(): JSX.Element {
   return (
     <p className="flex items-center gap-1 py-1" role="status" aria-label="Gerando resposta">

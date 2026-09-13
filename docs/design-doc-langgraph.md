@@ -34,7 +34,7 @@ O adapter Qwen3.5-4B + LoRA foi treinado e avaliado nos notebooks, mas ainda nã
 ## 4. Não objetivos
 
 - Integração com prontuário, identidade, alertas ou dados reais de hospital.
-- API FastAPI/SSE, autenticação corporativa ou checkpointer durável no MVP.
+- Autenticação corporativa ou checkpointer durável no MVP (a API JSON síncrona já existe em `app/api/`).
 - Prescrição, posologia, ajuste terapêutico ou decisão clínica autônoma.
 - Garantir detecção semântica absoluta de toda alucinação de texto livre.
 - Usar o modelo fine-tuned para tool calling, extração de IDs, autorização, roteamento ou criticidade.
@@ -91,7 +91,7 @@ Seu escopo é limitado a:
 - persistência SQLite de `alerts` simulados e `audit_events` minimizados;
 - implementação das portas descritas em [langgraph-backend-contract.md](langgraph-backend-contract.md).
 
-Ele não inclui FastAPI, SSE, autenticação corporativa, banco remoto, notificações externas, filas ou checkpointer durável. Essas evoluções continuam fora do MVP.
+A API JSON síncrona (`app/api/`) já expõe o workflow sem streaming de tokens. Autenticação corporativa, banco remoto, notificações externas, filas ou checkpointer durável continuam fora do MVP.
 
 | Camada | Responsabilidade no MVP |
 | --- | --- |

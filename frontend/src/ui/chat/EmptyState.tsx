@@ -1,9 +1,9 @@
 import type { JSX } from 'react'
 
 const SUGGESTIONS = [
-  'Mostre o prontuário da paciente 12345',
-  'Quais exames estão pendentes para a 12345?',
-  'Qual o protocolo para ciclo irregular?',
+  'Paciente P-042 com hipertensão gestacional tem exames pendentes?',
+  'Quais sinais exigem atenção no puerpério?',
+  'Paciente P-101 tem exames pendentes?',
 ] as const
 
 /** Primeira tela: o que o assistente faz e três perguntas para começar. */

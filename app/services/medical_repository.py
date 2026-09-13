@@ -13,8 +13,8 @@ class MedicalRepositorySqlite:
         self.connection.row_factory = sqlite3.Row
 
     @classmethod
-    def open(cls, path: str | Path) -> "MedicalRepositorySqlite":
-        return cls(sqlite3.connect(path))
+    def open(cls, path: str | Path, *, check_same_thread: bool = True) -> "MedicalRepositorySqlite":
+        return cls(sqlite3.connect(path, check_same_thread=check_same_thread))
 
     def initialize(self) -> None:
         try:
