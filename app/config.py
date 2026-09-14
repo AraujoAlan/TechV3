@@ -44,6 +44,13 @@ REDATOR_API_KEY = os.getenv("REDATOR_API_KEY", "nao-usada")  # llama-server igno
 REDATOR_TEMPERATURA = float(os.getenv("REDATOR_TEMPERATURA", "0.3"))
 REDATOR_MAX_TOKENS = int(os.getenv("REDATOR_MAX_TOKENS", "800"))
 
+# --- Validação da resposta ----------------------------------------------------
+# Quantas vezes o grafo pode mandar o redator reescrever uma resposta reprovada.
+# O padrão é zero, e não por economia: com revisão ligada, um rascunho pode ser
+# descartado depois de transmitido, então os tokens param de ir à tela enquanto
+# são gerados e a resposta só aparece no fim. Zero mantém a digitação ao vivo.
+MAX_REVISOES = int(os.getenv("MAX_REVISOES", "0"))
+
 # --- Auditoria ----------------------------------------------------------------
 CAMINHO_LOG = _caminho("CAMINHO_LOG", RAIZ / "logs" / "auditoria.jsonl")
 

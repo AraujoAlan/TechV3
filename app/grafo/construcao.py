@@ -1,98 +1,49 @@
-"""O agente do assistente médico.
+"""Montagem do assistente: o agente que consulta, dentro do grafo que controla.
 
-É um `create_agent` só, com dois modelos dentro dele:
+São dois modelos e duas responsabilidades:
 
     médico pergunta
       → GLM decide e chama ferramentas (banco, protocolos, alertas)
-      → GLM decide que já tem o suficiente
+      → o grafo avalia criticidade e, se for o caso, alerta a equipe
       → o modelo fine-tunado escreve a resposta
+      → o grafo confere a resposta antes de entregá-la
       → médico lê
 
-A troca acontece no middleware `escrever_com_modelo_finetunado`. Ele deixa o
-agente rodar normalmente e observa cada resposta do modelo: enquanto vierem tool
-calls, o GLM segue no comando; quando vier uma resposta sem tool call, a rota
-acabou — e essa fala é refeita com o modelo fine-tunado, com o system prompt do
-treino e sem ferramenta nenhuma na mão.
-
 Por que dois modelos, e não um. O GLM sabe montar tool call com argumento certo,
-que é o que o loop exige; o nosso modelo foi ajustado em pares pergunta-resposta
-clínicos, sem um único exemplo de tool calling. Cada um faz o que treinou.
+que é o que o laço de consulta exige; o nosso modelo foi ajustado em pares
+pergunta-resposta clínicos, sem um único exemplo de tool calling. Cada um faz o
+que treinou.
+
+Por que um grafo em volta, e não só o agente. O agente decide sozinho quando
+parar de consultar e o que responder — e isso basta para conversar, mas não para
+sustentar as garantias que a fase pede. Criticidade avaliada por regra,
+escalonamento obrigatório e resposta conferida antes de sair não podem depender
+de o modelo ter lembrado: são nós do grafo, executados sempre, e cada passagem
+deixa linha na auditoria.
 """
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import ToolCallLimitMiddleware, wrap_model_call
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain.agents.middleware import ToolCallLimitMiddleware
 
 from app import config
 from app.ferramentas.alertas import FERRAMENTAS_ALERTA
 from app.ferramentas.protocolos import FERRAMENTAS_PROTOCOLO
 from app.ferramentas.sql import FERRAMENTAS_SQL
-from app.grafo.prompts import (
-    SYSTEM_ASSISTENTE,
-    SYSTEM_ROTEADOR,
-    montar_pergunta_com_contexto,
-)
-from app.llm.redator import criar_redator
+from app.grafo.fluxo import montar_grafo
+from app.grafo.prompts import SYSTEM_ROTEADOR
 from app.llm.roteador import criar_roteador
 
 FERRAMENTAS = [*FERRAMENTAS_SQL, *FERRAMENTAS_PROTOCOLO, *FERRAMENTAS_ALERTA]
 
 
-def montar_conversa_do_redator(mensagens: list) -> list:
-    """Reconstrói a conversa como o modelo fine-tunado espera vê-la.
+def construir_roteador():
+    """O agente que levanta os dados, sem escrever a resposta final.
 
-    O que chega aqui é o rascunho do roteador: pergunta, decisões de tool call e
-    resultados de ferramenta, tudo misturado. O modelo fine-tunado nunca viu isso
-    no treino — ele viu system, pergunta, resposta. Então a conversa é remontada
-    nesse formato, com o que as ferramentas trouxeram anexado à pergunta do turno.
+    A redação saiu daqui: ela é um nó do grafo, depois da avaliação de
+    criticidade. Enquanto o redator era um middleware deste agente, ele
+    escrevia antes de qualquer verificação — e não havia onde encaixar o
+    escalonamento obrigatório sem reescrever texto já entregue.
     """
-    corte = max(
-        (i for i, m in enumerate(mensagens) if isinstance(m, HumanMessage)),
-        default=0,
-    )
-    pergunta = mensagens[corte].content if mensagens else ""
-
-    # Histórico: só as falas de verdade. Tool call e resultado de ferramenta de
-    # turnos passados não entram — são o caderno de rascunho do roteador.
-    historico = [
-        m
-        for m in mensagens[:corte]
-        if isinstance(m, HumanMessage)
-        or (isinstance(m, AIMessage) and m.content and not m.tool_calls)
-    ]
-
-    resultados = [m for m in mensagens[corte:] if isinstance(m, ToolMessage)]
-    contexto = "\n\n".join(
-        f"[{m.name}]\n{m.content}" for m in resultados if str(m.content).strip()
-    )
-
-    return [
-        SystemMessage(SYSTEM_ASSISTENTE),
-        *historico,
-        HumanMessage(montar_pergunta_com_contexto(pergunta, contexto)),
-    ]
-
-
-@wrap_model_call
-async def escrever_com_modelo_finetunado(request, handler):
-    """Passa a caneta para o modelo fine-tunado quando a rota termina."""
-    resposta = await handler(request)
-
-    ultima = resposta.result[-1]
-    if getattr(ultima, "tool_calls", None):
-        return resposta  # ainda consultando: o GLM continua
-
-    pedido = request.override(
-        model=criar_redator(),
-        tools=[],  # a resposta final não chama ferramenta
-        system_message=SystemMessage(SYSTEM_ASSISTENTE),
-        messages=montar_conversa_do_redator(request.messages),
-    )
-    return await handler(pedido)
-
-
-def construir_agente():
-    """Monta o agente do assistente."""
     return create_agent(
         model=criar_roteador(),
         tools=FERRAMENTAS,
@@ -105,7 +56,11 @@ def construir_agente():
             ToolCallLimitMiddleware(
                 run_limit=config.ROTEADOR_MAX_PASSOS, exit_behavior="continue"
             ),
-            escrever_com_modelo_finetunado,
         ],
-        name="assistente",
+        name="roteador",
     )
+
+
+def construir_agente():
+    """Monta o assistente inteiro, pronto para receber um turno."""
+    return montar_grafo(construir_roteador())

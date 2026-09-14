@@ -20,7 +20,14 @@ from app import config
 ETIQUETA_REDATOR = "redator"
 
 
-def criar_redator() -> ChatOpenAI:
+def criar_redator(etiquetado: bool = True) -> ChatOpenAI:
+    """O redator do turno.
+
+    Args:
+        etiquetado: marca os tokens para a camada de transmissão mandá-los à
+            tela enquanto chegam. Desligue quando a resposta ainda puder ser
+            reprovada pela validação — texto já lido não se desfaz.
+    """
     return ChatOpenAI(
         model=config.REDATOR_MODELO,
         base_url=config.REDATOR_BASE_URL,
@@ -41,7 +48,7 @@ def criar_redator() -> ChatOpenAI:
         streaming=True,
         # A etiqueta separa estes tokens dos do roteador no stream. Sem ela, a
         # fala que o GLM produz antes da troca de modelo vazaria para a tela.
-        tags=[ETIQUETA_REDATOR],
+        tags=[ETIQUETA_REDATOR] if etiquetado else [],
         timeout=120,
         max_retries=1,
     )

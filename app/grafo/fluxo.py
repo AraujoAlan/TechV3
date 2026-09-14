@@ -1,198 +1,435 @@
-import os
-import re
-import unicodedata
-import uuid
-from dataclasses import dataclass
+"""O fluxo do turno, como um `StateGraph`.
 
+A espinha deste grafo — auditoria por nó com chave de idempotência, avaliação de
+criticidade antes de redigir, escalonamento obrigatório e o laço
+gerar → validar → gerar — vem do fluxo LangGraph escrito por Igor Pestana. O que
+mudou na integração foi de onde vêm os dados.
+
+**Recuperação.** O desenho original tinha três nós fixos (`record`, `exams`,
+`protocol`) chamando métodos tipados de um repositório. Aqui esses três nós dão
+lugar a um só, que roda o agente roteador com as ferramentas do repositório: o
+GLM decide o que consultar e escreve o SQL. É o que mantém viva a consulta livre
+à base estruturada — o banco tem 10 mil prontuários e 9 protocolos, e uma
+interface de três métodos fixos não alcança isso.
+
+O preço é que a recuperação deixa de ser determinística. O controle volta abaixo
+dela: criticidade, escalonamento e validação continuam em código, e nenhum deles
+pergunta nada a um modelo.
+
+**Crítica por LLM.** O desenho original tinha um nó `critique` que pedia a um
+modelo generalista para apontar problemas na resposta, e alimentava o validador
+com isso. Ele não sobreviveu: o validador desta integração é inteiramente
+determinístico (ver `app/seguranca/limites.py`), então a crítica não teria
+consumidor — seria uma ida ao modelo cujo resultado ninguém lê.
+"""
+
+import inspect
+import re
+import uuid
+
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 
-from app.contracts.errors import WorkflowServiceError
-from app.contracts.models import AlertRequest, CriticalityResult, CritiqueResult, InterpretationResult, Source
-from app.contracts.ports import AlertService, AuditLogger, AuthorizationService, CriticalityService, FinalAnswerLLM, GeneralLLM, MedicalRepository, SafetyValidator
-from .estado import WorkflowState
+from app import config as configuracao
+from app.ferramentas.alertas import gravar_alerta
+from app.grafo.estado import EstadoDoTurno
+from app.grafo.prompts import SYSTEM_ASSISTENTE, montar_pergunta_com_contexto
+from app.hospital import banco
+from app.llm.redator import criar_redator
+from app.seguranca import criticidade as regras
+from app.seguranca import limites
 
-SAFE_LIMITATION = "Não foi possível fornecer uma resposta clínica segura nesta execução. Procure avaliação de um profissional de saúde."
-CRITICAL_ESCALATION = "Como há sinais de alarme no contexto, recomenda-se busca imediata de avaliação humana."
-
-
-def max_response_revisions() -> int:
-    value = os.getenv("MAX_RESPONSE_REVISIONS", "1")
-    try:
-        result = int(value)
-    except ValueError as error:
-        raise ValueError("MAX_RESPONSE_REVISIONS deve ser um inteiro maior ou igual a zero") from error
-    if result < 0:
-        raise ValueError("MAX_RESPONSE_REVISIONS deve ser um inteiro maior ou igual a zero")
-    return result
+# Como os identificadores aparecem no banco deste hospital. O fluxo original
+# procurava o formato `P-042` do banco de demonstração; aqui são 10 mil
+# pacientes gerados pelo pipeline do SIH/SUS.
+PADRAO_ID_PACIENTE = re.compile(r"\bPAC\d{8}\b", re.IGNORECASE)
 
 
-@dataclass(frozen=True)
-class WorkflowDependencies:
-    authorization: AuthorizationService
-    repository: MedicalRepository
-    criticality: CriticalityService
-    alerts: AlertService
-    audit: AuditLogger
-    general_llm: GeneralLLM
-    final_answer_llm: FinalAnswerLLM
-    validator: SafetyValidator
-    condition_catalog: frozenset[str] = frozenset({"hipertensao-gestacional", "puerperio"})
+# --- auditoria ----------------------------------------------------------------
 
 
-def _sources(*items) -> list[Source]:
-    result: list[Source] = []
-    for item in items:
-        if item is None: continue
-        source = item.source if hasattr(item, "source") else item
-        if source.id not in {existing.id for existing in result}: result.append(source)
-    return result
+def _registro(config) -> object | None:
+    """O `RegistroDoTurno` do turno, quando a API o injetou.
+
+    Fora da API — em teste, ou num script — o grafo roda sem registro. Os nós
+    funcionam igual; só não há linha de auditoria para gravar.
+    """
+    return (config or {}).get("configurable", {}).get("registro")
 
 
-def normalize_condition(candidate: str | None, catalog: frozenset[str]) -> str | None:
-    """Aceita variações de acento, espaço e sublinhado sem ampliar o catálogo."""
-    if not candidate:
-        return None
-    normalized = unicodedata.normalize("NFKD", candidate).encode("ascii", "ignore").decode().lower().strip()
-    normalized = re.sub(r"[\s_]+", "-", normalized)
-    normalized = re.sub(r"-+", "-", normalized)
-    return normalized if normalized in catalog else None
+def _anotador(nome: str, estado: EstadoDoTurno, config):
+    """Devolve a função que grava os eventos deste nó nesta passagem.
+
+    A chave de idempotência inclui a tentativa de revisão porque o laço passa
+    por `gerar` mais de uma vez: sem ela, a segunda passagem seria descartada
+    como repetição, e a auditoria mostraria um fluxo que não aconteceu.
+    """
+    registro = _registro(config)
+    tentativa = estado.get("revisao", 0)
+    turno_id = estado.get("turno_id", "?")
+
+    def anotar(evento: str, detalhes: dict) -> None:
+        if registro is not None:
+            registro.registrar_evento(
+                no=nome,
+                evento=evento,
+                detalhes=detalhes,
+                chave=f"{turno_id}:{nome}:{tentativa}:{evento}",
+            )
+
+    return anotar
 
 
-def build_workflow(deps: WorkflowDependencies):
-    max_revisions = max_response_revisions()
+def auditado(nome: str, no):
+    """Envolve um nó para que ele deixe rastro na auditoria.
 
-    def audited(name, node):
-        def invoke(state: WorkflowState):
-            attempt = state.get("revision_count", 0)
-            audit_id = state.get("audit_id")
+    Há duas versões porque `gerar` é assíncrono — ele espera o redator — e os
+    demais nós não são. Um envelope só, síncrono, devolveria a corotina de
+    `gerar` sem aguardá-la: o grafo receberia um objeto no lugar do resultado e
+    a resposta nunca seria escrita.
+    """
+    if inspect.iscoroutinefunction(no):
+
+        async def invocar_async(estado: EstadoDoTurno, config=None):
+            anotar = _anotador(nome, estado, config)
+            anotar("iniciado", {})
             try:
-                if audit_id:
-                    deps.audit.record_event(audit_id=audit_id, event="started", node=name, details={}, idempotency_key=f"{audit_id}:{name}:{attempt}:started")
-                result = node(state)
-                audit_id = state.get("audit_id") or result.get("audit_id")
-                if audit_id:
-                    if name in {"interpret", "analyze", "critique", "generate"}:
-                        llm = deps.final_answer_llm if name == "generate" else deps.general_llm
-                        usage = getattr(llm, "last_usage", None)
-                        if usage:
-                            deps.audit.record_event(audit_id=audit_id, event="llm_usage", node=name, details=usage, idempotency_key=f"{audit_id}:{name}:{attempt}:llm_usage")
-                    details = {"error_code": result.get("error_code")}
-                    if name == "validate":
-                        violations = result.get("violations", [])
-                        details.update({
-                            "revision_count": result.get("revision_count", attempt),
-                            "violation_count": len(violations),
-                            "violations": " | ".join(violations),
-                        })
-                    deps.audit.record_event(audit_id=audit_id, event="completed", node=name, details=details, idempotency_key=f"{audit_id}:{name}:{attempt}:completed")
-                return result
-            except WorkflowServiceError as error:
-                if audit_id:
-                    try:
-                        deps.audit.record_event(audit_id=audit_id, event="failed", node=name, details={"error_code": type(error).__name__}, idempotency_key=f"{audit_id}:{name}:{attempt}:failed")
-                    except WorkflowServiceError:
-                        pass
-                return {"error_code": type(error).__name__, "final_answer": SAFE_LIMITATION}
-        return invoke
-    def initialize(state: WorkflowState):
-        return {"audit_id": str(uuid.uuid4()), "revision_count": 0, "sources": [], "exams": []}
+                resultado = await no(estado, config) or {}
+            except Exception as erro:  # noqa: BLE001 — a falha vira saída segura
+                anotar("falhou", {"erro": f"{type(erro).__name__}: {erro}"})
+                return {"codigo_erro": type(erro).__name__}
 
-    def interpret(state: WorkflowState):
-        result: InterpretationResult = deps.general_llm.interpret(question=state["question"])
-        patient_id = result.candidate_patient_id if result.candidate_patient_id and result.candidate_patient_id.startswith("P-") else None
-        condition = normalize_condition(result.candidate_condition, deps.condition_catalog)
-        return {"patient_id": patient_id, "condition": condition, "error_code": "clarification" if not patient_id and not condition else None}
+            anotar("concluido", _detalhes_do_resultado(nome, resultado))
+            return resultado
 
-    def authorize(state: WorkflowState):
-        patient_id = state.get("patient_id")
-        return {"authorized": bool(patient_id and deps.authorization.is_patient_authorized(state["request_context"], patient_id))}
+        return invocar_async
 
-    def retrieve_record(state: WorkflowState):
-        record = deps.repository.get_patient_record(state["patient_id"])
-        if not record: return {"record": None, "error_code": "patient_not_found"}
-        return {"record": record, "sources": _sources(record)}
+    def invocar(estado: EstadoDoTurno, config=None):
+        anotar = _anotador(nome, estado, config)
+        anotar("iniciado", {})
+        try:
+            resultado = no(estado, config) or {}
+        except Exception as erro:  # noqa: BLE001 — a falha vira saída segura
+            anotar("falhou", {"erro": f"{type(erro).__name__}: {erro}"})
+            return {"codigo_erro": type(erro).__name__}
 
-    def retrieve_exams(state: WorkflowState):
-        exams = deps.repository.get_pending_exams(state["patient_id"])
-        return {"exams": exams, "sources": _sources(*state.get("sources", []), *(exam.source for exam in exams))}
+        anotar("concluido", _detalhes_do_resultado(nome, resultado))
+        return resultado
 
-    def retrieve_protocol(state: WorkflowState):
-        protocol = deps.repository.get_protocol(state["condition"])
-        return {"protocol": protocol, "sources": _sources(*state.get("sources", []), protocol) if protocol else state.get("sources", [])}
+    return invocar
 
-    def analyze(state: WorkflowState):
-        context = "\n".join(source.snippet or source.title for source in state.get("sources", []))
-        return {"analysis": deps.general_llm.analyze(question=state["question"], context=context, sources=state.get("sources", []))}
 
-    def criticality(state: WorkflowState):
-        return {"criticality": deps.criticality.evaluate(record=state.get("record"), exams=state.get("exams", []), protocol=state.get("protocol"))}
+def _detalhes_do_resultado(nome: str, resultado: dict) -> dict:
+    """O que vale registrar da saída de cada nó, sem copiar a resposta inteira."""
+    if nome == "criticidade":
+        avaliacao = resultado.get("criticidade")
+        return avaliacao.como_dicionario() if avaliacao else {}
 
-    def alert(state: WorkflowState):
-        critical: CriticalityResult = state["criticality"]
-        request = AlertRequest(audit_id=state["audit_id"], patient_id=state["patient_id"], rule_code=critical.rule_code or "UNKNOWN", rule_version=critical.rule_version, reason=critical.reason or "Criticidade sintética", idempotency_key=f"{state['audit_id']}:{critical.rule_code}")
-        recorded = deps.alerts.record_simulated_alert(request)
-        return {"alert_status": recorded.status}
+    if nome == "validar":
+        violacoes = resultado.get("violacoes", [])
+        return {
+            "violacoes": len(violacoes),
+            "detalhe": " | ".join(violacoes),
+            "revisao": resultado.get("revisao", 0),
+        }
 
-    def generate(state: WorkflowState):
-        context = "\n".join(f"[S{i + 1}] {source.snippet or source.title}" for i, source in enumerate(state.get("sources", [])))
-        return {"draft": deps.final_answer_llm.generate(question=state["question"], context=context, sources=state.get("sources", []), revision_violations=state.get("violations", []), revision_attempt=state["revision_count"])}
+    if nome == "alerta":
+        return {"alerta_id": resultado.get("alerta_id")}
 
-    def enforce_critical_escalation(state: WorkflowState):
-        critical = state.get("criticality", CriticalityResult(is_critical=False, rule_version="v1"))
-        draft = state["draft"].strip()
-        if not critical.is_critical or re.search(r"avaliação humana|procure.*(serviço|atendimento)|escalon", draft, re.IGNORECASE):
-            return {"draft": draft}
-        return {"draft": f"{draft}\n\n{CRITICAL_ESCALATION}"}
+    if resultado.get("codigo_erro"):
+        return {"codigo_erro": resultado["codigo_erro"]}
 
-    def critique(state: WorkflowState):
-        return {"critique": deps.general_llm.critique(question=state["question"], answer=state["draft"], sources=state.get("sources", []), has_individual_context=bool(state.get("record")), is_critical=state.get("criticality", CriticalityResult(is_critical=False, rule_version="v1")).is_critical)}
+    return {}
 
-    def validate(state: WorkflowState):
-        validation = deps.validator.validate(answer=state.get("draft", state.get("final_answer", "")), sources=state.get("sources", []), has_individual_context=bool(state.get("record")), is_critical=state.get("criticality", CriticalityResult(is_critical=False, rule_version="v1")).is_critical, critique=state.get("critique", CritiqueResult()))
-        if validation.approved: return {"final_answer": state["draft"], "violations": []}
-        if validation.requires_revision and state["revision_count"] < max_revisions:
-            return {"violations": validation.violations, "revision_count": state["revision_count"] + 1}
-        return {"final_answer": validation.safe_message or SAFE_LIMITATION, "violations": validation.violations}
 
-    def limitation(state: WorkflowState):
-        return {"final_answer": SAFE_LIMITATION}
+# --- nós ----------------------------------------------------------------------
 
-    def route_after_interpret(state: WorkflowState):
-        if state.get("error_code") and state["error_code"] != "clarification": return "limitation"
-        if state.get("error_code") == "clarification": return "limitation"
-        return "authorize" if state.get("patient_id") else "protocol"
-    def route_after_authorize(state: WorkflowState): return "record" if state.get("authorized") and not state.get("error_code") else "limitation"
-    def route_after_record(state: WorkflowState): return "limitation" if state.get("error_code") else "exams"
-    def route_after_exams(state: WorkflowState): return "limitation" if state.get("error_code") else ("protocol" if state.get("condition") else "analyze")
-    def route_after_protocol(state: WorkflowState): return "limitation" if state.get("error_code") else "analyze"
-    def route_after_analyze(state: WorkflowState): return "limitation" if state.get("error_code") else "criticality"
-    def route_after_criticality(state: WorkflowState):
-        if state.get("error_code"): return "limitation"
-        critical = state["criticality"].is_critical
-        if critical and state.get("patient_id"): return "alert"
-        if critical: return "limitation"
-        return "generate"
-    def route_after_validate(state: WorkflowState):
-        return "generate" if state.get("revision_count", 0) <= max_revisions and not state.get("final_answer") else END
-    def route_after_alert(state: WorkflowState): return "limitation" if state.get("error_code") else "generate"
-    def route_after_generate(state: WorkflowState): return "limitation" if state.get("error_code") else "enforce_critical_escalation"
-    def route_after_enforce_critical_escalation(state: WorkflowState): return "limitation" if state.get("error_code") else "critique"
-    def route_after_critique(state: WorkflowState): return "limitation" if state.get("error_code") else "validate"
 
-    graph = StateGraph(WorkflowState)
-    for name, node in {"initialize": initialize, "interpret": interpret, "authorize": authorize, "record": retrieve_record, "exams": retrieve_exams, "protocol": retrieve_protocol, "analyze": analyze, "criticality": criticality, "alert": alert, "generate": generate, "enforce_critical_escalation": enforce_critical_escalation, "critique": critique, "validate": validate, "limitation": limitation}.items(): graph.add_node(name, audited(name, node))
-    graph.add_edge(START, "initialize"); graph.add_edge("initialize", "interpret")
-    graph.add_conditional_edges("interpret", route_after_interpret, {"authorize": "authorize", "protocol": "protocol", "limitation": "limitation"})
-    graph.add_conditional_edges("authorize", route_after_authorize, {"record": "record", "limitation": "limitation"})
-    graph.add_conditional_edges("record", route_after_record, {"exams": "exams", "limitation": "limitation"})
-    graph.add_conditional_edges("exams", route_after_exams, {"protocol": "protocol", "analyze": "analyze"})
-    graph.add_conditional_edges("protocol", route_after_protocol, {"analyze": "analyze", "limitation": "limitation"})
-    graph.add_conditional_edges("analyze", route_after_analyze, {"criticality": "criticality", "limitation": "limitation"})
-    graph.add_conditional_edges("criticality", route_after_criticality, {"alert": "alert", "generate": "generate", "limitation": "limitation"})
-    graph.add_conditional_edges("alert", route_after_alert, {"generate": "generate", "limitation": "limitation"})
-    graph.add_conditional_edges("generate", route_after_generate, {"enforce_critical_escalation": "enforce_critical_escalation", "limitation": "limitation"})
-    graph.add_conditional_edges("enforce_critical_escalation", route_after_enforce_critical_escalation, {"critique": "critique", "limitation": "limitation"})
-    graph.add_conditional_edges("critique", route_after_critique, {"validate": "validate", "limitation": "limitation"})
-    graph.add_conditional_edges("validate", route_after_validate, {"generate": "generate", END: END})
-    graph.add_edge("limitation", END)
-    return graph.compile()
+def inicializar(estado: EstadoDoTurno, config=None) -> dict:
+    """Abre o turno e coloca a pergunta no formato que o roteador consome."""
+    return {
+        "turno_id": str(uuid.uuid4()),
+        "revisao": 0,
+        "fontes": [],
+        "ferramentas_usadas": [],
+        "violacoes": [],
+        "codigo_erro": None,
+        "messages": [HumanMessage(estado["pergunta"])],
+    }
+
+
+def identificar_paciente(estado: EstadoDoTurno, config=None) -> dict:
+    """Procura um identificador de paciente na pergunta.
+
+    É de propósito que isto seja uma expressão regular e não uma chamada a
+    modelo. O identificador decide se haverá avaliação de criticidade e se um
+    alerta pode ser emitido — não é lugar para uma extração probabilística.
+    Quando o médico não cita paciente, a pergunta é geral e o fluxo segue sem
+    caso clínico em curso.
+    """
+    achado = PADRAO_ID_PACIENTE.search(estado.get("pergunta", ""))
+    return {"id_paciente": achado.group(0).upper() if achado else None}
+
+
+def coletar_recuperacao(estado: EstadoDoTurno, config=None) -> dict:
+    """Lê o que o roteador consultou e separa fontes e ferramentas usadas.
+
+    As fontes saem do artefato de cada ferramenta — dado produzido por código,
+    não texto gerado por modelo. É essa procedência que sustenta o evento
+    `sources` do contrato: dá para apontar de qual consulta saiu cada número.
+    """
+    fontes: list[dict] = []
+    ferramentas: list[str] = []
+
+    for mensagem in estado.get("messages", []):
+        if not isinstance(mensagem, ToolMessage):
+            continue
+
+        if mensagem.name:
+            ferramentas.append(mensagem.name)
+
+        fonte = (mensagem.artifact or {}).get("fonte")
+        if fonte:
+            fontes.append(fonte)
+
+    return {"fontes": fontes, "ferramentas_usadas": ferramentas}
+
+
+def avaliar_criticidade(estado: EstadoDoTurno, config=None) -> dict:
+    """Classifica o caso a partir do registro estruturado do paciente.
+
+    Consulta o banco de novo, em vez de reaproveitar o que o roteador trouxe, e
+    isso é deliberado: o que chega do roteador é texto formatado para o modelo
+    ler. A regra precisa dos campos como o banco os guarda.
+    """
+    id_paciente = estado.get("id_paciente")
+    if not id_paciente:
+        return {"criticidade": regras.NAO_CRITICO}
+
+    try:
+        registro = banco.consultar_banco(
+            lambda ferramenta: ferramenta.buscar_paciente(id_paciente)
+        )
+    except ValueError:
+        # Paciente citado que não existe no banco. Não é erro de serviço: o
+        # médico pode ter digitado errado, e a resposta deve dizer isso.
+        return {"criticidade": regras.NAO_CRITICO}
+
+    return {"criticidade": regras.avaliar(registro["paciente"])}
+
+
+def alertar_equipe(estado: EstadoDoTurno, config=None) -> dict:
+    """Registra o alerta que a regra de criticidade disparou."""
+    avaliacao: regras.Criticidade = estado["criticidade"]
+
+    registro = gravar_alerta(
+        id_paciente=estado["id_paciente"],
+        mensagem=avaliacao.motivo or "Caso classificado como crítico.",
+        prioridade="emergencia",
+        origem="regra-de-criticidade",
+        codigo_regra=avaliacao.codigo_regra,
+        versao_regra=avaliacao.versao_regra,
+    )
+
+    return {"alerta_id": registro["id"]}
+
+
+def montar_conversa_do_redator(estado: EstadoDoTurno) -> list:
+    """Reconstrói a conversa como o modelo fine-tunado espera vê-la.
+
+    O que há no estado é o rascunho do roteador: pergunta, decisões de tool call
+    e resultados de ferramenta, tudo misturado. O modelo fine-tunado nunca viu
+    isso no treino — ele viu system, pergunta, resposta. Então a conversa é
+    remontada nesse formato, com o que as ferramentas trouxeram anexado à
+    pergunta do turno.
+    """
+    mensagens = estado.get("messages", [])
+    corte = max(
+        (i for i, m in enumerate(mensagens) if isinstance(m, HumanMessage)),
+        default=0,
+    )
+    pergunta = mensagens[corte].content if mensagens else estado.get("pergunta", "")
+
+    # Histórico: só as falas de verdade. Tool call e resultado de ferramenta de
+    # turnos passados não entram — são o caderno de rascunho do roteador.
+    historico = [
+        m
+        for m in mensagens[:corte]
+        if isinstance(m, HumanMessage)
+        or (isinstance(m, AIMessage) and m.content and not m.tool_calls)
+    ]
+
+    resultados = [m for m in mensagens[corte:] if isinstance(m, ToolMessage)]
+    contexto = "\n\n".join(
+        f"[{m.name}]\n{m.content}" for m in resultados if str(m.content).strip()
+    )
+
+    violacoes = estado.get("violacoes", [])
+    if violacoes:
+        # A segunda tentativa precisa saber o que reprovou a primeira, senão ela
+        # reescreve o mesmo texto e queima o orçamento de revisão à toa.
+        contexto += "\n\n[correções exigidas]\n" + "\n".join(
+            f"- {violacao}" for violacao in violacoes
+        )
+
+    return [
+        SystemMessage(SYSTEM_ASSISTENTE),
+        *historico,
+        HumanMessage(montar_pergunta_com_contexto(pergunta, contexto)),
+    ]
+
+
+async def gerar(estado: EstadoDoTurno, config=None) -> dict:
+    """O modelo fine-tunado escreve a resposta ao médico.
+
+    A etiqueta do redator só é aplicada quando não há revisão configurada. Com
+    revisão ligada, um rascunho pode ser reprovado depois de já ter sido
+    transmitido, e o médico teria lido um texto que o grafo descartou — então os
+    tokens ficam retidos e a resposta aprovada é emitida de uma vez.
+    """
+    redator = criar_redator(etiquetado=configuracao.MAX_REVISOES == 0)
+    resposta = await redator.ainvoke(montar_conversa_do_redator(estado))
+    return {"rascunho": str(resposta.content)}
+
+
+def escalonar(estado: EstadoDoTurno, config=None) -> dict:
+    """Garante que todo caso crítico oriente acionar a equipe.
+
+    O redator costuma fazer isso sozinho quando o config deixa claro. Quando
+    não faz, o aviso é anexado — porque a fase exige que o caso crítico escale,
+    e "o modelo geralmente lembra" não é uma garantia que se possa auditar.
+    """
+    avaliacao: regras.Criticidade = estado.get("criticidade", regras.NAO_CRITICO)
+    rascunho = estado.get("rascunho", "").strip()
+
+    if not avaliacao.critico or limites.PADRAO_ESCALONAMENTO.search(rascunho):
+        return {"rascunho": rascunho}
+
+    return {"rascunho": f"{rascunho}\n\n{limites.AVISO_ESCALONAMENTO}"}
+
+
+def validar(estado: EstadoDoTurno, config=None) -> dict:
+    """Decide entre entregar, reescrever ou cair na mensagem de limitação."""
+    avaliacao: regras.Criticidade = estado.get("criticidade", regras.NAO_CRITICO)
+    rascunho = estado.get("rascunho", "")
+
+    veredito = limites.validar(
+        resposta=rascunho,
+        ferramentas_usadas=estado.get("ferramentas_usadas", []),
+        critico=avaliacao.critico,
+    )
+
+    if veredito.aprovada:
+        return {"resposta": rascunho, "violacoes": []}
+
+    revisao = estado.get("revisao", 0)
+    if revisao < configuracao.MAX_REVISOES:
+        return {"violacoes": veredito.violacoes, "revisao": revisao + 1}
+
+    return {"resposta": limites.MENSAGEM_LIMITACAO, "violacoes": veredito.violacoes}
+
+
+def limitacao(_estado: EstadoDoTurno, config=None) -> dict:
+    """Saída segura única para qualquer falha de serviço no caminho."""
+    return {"resposta": limites.MENSAGEM_LIMITACAO}
+
+
+# --- roteamento ---------------------------------------------------------------
+
+
+def _falhou(estado: EstadoDoTurno) -> bool:
+    return bool(estado.get("codigo_erro"))
+
+
+def rota_apos_coletar(estado: EstadoDoTurno) -> str:
+    return "limitacao" if _falhou(estado) else "criticidade"
+
+
+def rota_apos_criticidade(estado: EstadoDoTurno) -> str:
+    if _falhou(estado):
+        return "limitacao"
+
+    avaliacao: regras.Criticidade = estado.get("criticidade", regras.NAO_CRITICO)
+    # Alerta sem paciente identificado não teria destinatário no plantão.
+    if avaliacao.critico and estado.get("id_paciente"):
+        return "alerta"
+    return "gerar"
+
+
+def rota_apos_alerta(estado: EstadoDoTurno) -> str:
+    return "limitacao" if _falhou(estado) else "gerar"
+
+
+def rota_apos_gerar(estado: EstadoDoTurno) -> str:
+    return "limitacao" if _falhou(estado) else "escalonamento"
+
+
+def rota_apos_escalonamento(estado: EstadoDoTurno) -> str:
+    return "limitacao" if _falhou(estado) else "validar"
+
+
+def rota_apos_validar(estado: EstadoDoTurno) -> str:
+    if _falhou(estado):
+        return "limitacao"
+    # Sem resposta definida, `validar` pediu reescrita.
+    return END if estado.get("resposta") else "gerar"
+
+
+# --- montagem -----------------------------------------------------------------
+
+
+def montar_grafo(agente_roteador):
+    """Monta o grafo do turno em volta do agente que faz as consultas.
+
+    O agente entra como subgrafo, e não como chamada dentro de um nó, para que
+    as atualizações dele apareçam no stream enquanto acontecem. É o que mantém a
+    trilha de ferramentas da interface preenchendo em tempo real, em vez de
+    surgir inteira quando a recuperação termina.
+    """
+    grafo = StateGraph(EstadoDoTurno)
+
+    grafo.add_node("inicializar", auditado("inicializar", inicializar))
+    grafo.add_node("identificar", auditado("identificar", identificar_paciente))
+    grafo.add_node("recuperar", agente_roteador)
+    grafo.add_node("coletar", auditado("coletar", coletar_recuperacao))
+    grafo.add_node("criticidade", auditado("criticidade", avaliar_criticidade))
+    grafo.add_node("alerta", auditado("alerta", alertar_equipe))
+    grafo.add_node("gerar", auditado("gerar", gerar))
+    grafo.add_node("escalonamento", auditado("escalonamento", escalonar))
+    grafo.add_node("validar", auditado("validar", validar))
+    grafo.add_node("limitacao", auditado("limitacao", limitacao))
+
+    grafo.add_edge(START, "inicializar")
+    grafo.add_edge("inicializar", "identificar")
+    grafo.add_edge("identificar", "recuperar")
+    grafo.add_edge("recuperar", "coletar")
+
+    grafo.add_conditional_edges(
+        "coletar",
+        rota_apos_coletar,
+        {"criticidade": "criticidade", "limitacao": "limitacao"},
+    )
+    grafo.add_conditional_edges(
+        "criticidade",
+        rota_apos_criticidade,
+        {"alerta": "alerta", "gerar": "gerar", "limitacao": "limitacao"},
+    )
+    grafo.add_conditional_edges(
+        "alerta", rota_apos_alerta, {"gerar": "gerar", "limitacao": "limitacao"}
+    )
+    grafo.add_conditional_edges(
+        "gerar",
+        rota_apos_gerar,
+        {"escalonamento": "escalonamento", "limitacao": "limitacao"},
+    )
+    grafo.add_conditional_edges(
+        "escalonamento",
+        rota_apos_escalonamento,
+        {"validar": "validar", "limitacao": "limitacao"},
+    )
+    grafo.add_conditional_edges(
+        "validar", rota_apos_validar, {"gerar": "gerar", END: END}
+    )
+    grafo.add_edge("limitacao", END)
+
+    return grafo.compile()
