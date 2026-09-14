@@ -43,7 +43,34 @@ class RegistroDoTurno:
         self.resposta = ""
         self.alertas: list[str] = []
         self.erro: str | None = None
+        self.eventos: list[dict] = []
+        self.criticidade: dict | None = None
+        self.violacoes: list[str] = []
+        self._chaves_vistas: set[str] = set()
         self._inicio = time.monotonic()
+
+    def registrar_evento(
+        self, *, no: str, evento: str, detalhes: dict, chave: str
+    ) -> None:
+        """Anota a passagem por um nó do grafo.
+
+        A `chave` de idempotência existe porque o grafo revisita nós: o loop de
+        revisão passa por `gerar` mais de uma vez, e sem ela a mesma tentativa
+        apareceria duas vezes se um nó fosse reexecutado. Repetição silenciosa
+        na auditoria é pior que ausência — ela sugere um fluxo que não houve.
+        """
+        if chave in self._chaves_vistas:
+            return
+
+        self._chaves_vistas.add(chave)
+        self.eventos.append(
+            {
+                "no": no,
+                "evento": evento,
+                "em_s": round(time.monotonic() - self._inicio, 3),
+                **({"detalhes": detalhes} if detalhes else {}),
+            }
+        )
 
     def registrar_ferramenta(self, nome: str, argumentos: dict, saida: str) -> None:
         self.ferramentas.append(
@@ -76,6 +103,11 @@ class RegistroDoTurno:
             "resposta": self.resposta,
             "resposta_chars": len(self.resposta),
             "alertas_de_limite": self.alertas,
+            # O caminho percorrido no grafo, nó a nó. É o que permite responder
+            # "por que esta resposta saiu assim" sem reexecutar o turno.
+            "eventos": self.eventos,
+            "criticidade": self.criticidade,
+            "violacoes": self.violacoes,
             "erro": self.erro,
             "duracao_s": round(time.monotonic() - self._inicio, 2),
             "modelo_roteador": config.ROTEADOR_MODELO,
