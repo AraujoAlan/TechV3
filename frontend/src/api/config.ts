@@ -10,7 +10,7 @@
 export const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? ''
 
 /**
- * Quando `true`, `sendChat` usa o mock local em vez da rede.
+ * Quando `true`, `streamChat` usa o mock local em vez da rede.
  * Permite desenvolver e demonstrar o frontend sem o backend no ar.
  */
 export const USE_MOCK: boolean = import.meta.env.VITE_USE_MOCK !== 'false'

@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
-import { sendChat, toUserMessage } from '../api'
-import type { Message } from '../api'
+import { streamChat, toUserMessage } from '../api'
+import type { Message, StreamEvent, ToolCall } from '../api'
 import { createId } from '../lib/id'
 
 export type ChatStatus = 'idle' | 'streaming'
@@ -15,8 +15,11 @@ export interface UseChatResult {
 }
 
 /**
- * Orquestra a conversa: mantém o histórico local, envia só a pergunta
- * corrente à API e preenche uma única mensagem do assistente ao concluir.
+ * Orquestra a conversa: mantém o histórico, consome o stream da API e
+ * traduz cada `StreamEvent` em atualização de estado.
+ *
+ * É a única ponte entre `api/` e `ui/` — os componentes só recebem dados
+ * prontos e callbacks.
  */
 export function useChat(): UseChatResult {
   const [messages, setMessages] = useState<Message[]>([])
@@ -26,6 +29,7 @@ export function useChat(): UseChatResult {
   const abortRef = useRef<AbortController | null>(null)
   const conversationRef = useRef<string>(createId('conv'))
 
+  /** Aplica uma alteração na mensagem do assistente que está sendo montada. */
   const patchAssistant = useCallback((id: string, patch: (draft: Message) => Message) => {
     setMessages((current) =>
       current.map((message) => (message.id === id ? patch(message) : message)),
@@ -54,7 +58,16 @@ export function useChat(): UseChatResult {
         streaming: true,
       }
 
-      setMessages((current) => [...current, userMessage, assistantMessage])
+      // O histórico enviado à API é o que existia + a pergunta nova.
+      // Lido do estado anterior para não depender de um render intermediário.
+      let history: Array<{ role: 'user' | 'assistant'; content: string }> = []
+      setMessages((current) => {
+        history = [...current, userMessage].map(({ role, content: body }) => ({
+          role,
+          content: body,
+        }))
+        return [...current, userMessage, assistantMessage]
+      })
 
       const controller = new AbortController()
       abortRef.current = controller
@@ -62,20 +75,14 @@ export function useChat(): UseChatResult {
 
       void (async () => {
         try {
-          const response = await sendChat(
-            { question: text, conversation_id: conversationRef.current },
+          const stream = streamChat(
+            { messages: history, conversationId: conversationRef.current },
             controller.signal,
           )
 
-          patchAssistant(assistantId, (draft) => ({
-            ...draft,
-            content: response.answer,
-            sources: response.sources,
-            alert: response.alert,
-            outcome: response.outcome,
-            streaming: false,
-            error: undefined,
-          }))
+          for await (const event of stream) {
+            applyEvent(event, assistantId, patchAssistant, conversationRef)
+          }
         } catch (cause) {
           const message = toUserMessage(cause)
           const aborted = controller.signal.aborted
@@ -84,9 +91,9 @@ export function useChat(): UseChatResult {
           patchAssistant(assistantId, (draft) => ({
             ...draft,
             error: aborted ? undefined : message,
-            streaming: false,
           }))
         } finally {
+          patchAssistant(assistantId, (draft) => ({ ...draft, streaming: false }))
           abortRef.current = null
           setStatus('idle')
         }
@@ -108,4 +115,53 @@ export function useChat(): UseChatResult {
   }, [])
 
   return { messages, status, error, send, stop, reset }
+}
+
+/** Traduz um evento do stream na mutação correspondente da mensagem. */
+function applyEvent(
+  event: StreamEvent,
+  assistantId: string,
+  patch: (id: string, fn: (draft: Message) => Message) => void,
+  conversation: { current: string },
+): void {
+  switch (event.type) {
+    case 'token':
+      patch(assistantId, (draft) => ({ ...draft, content: draft.content + event.content }))
+      break
+
+    case 'tool_start': {
+      const call: ToolCall = {
+        id: event.id,
+        name: event.name,
+        input: event.input,
+        status: 'running',
+      }
+      patch(assistantId, (draft) => ({
+        ...draft,
+        toolCalls: [...(draft.toolCalls ?? []), call],
+      }))
+      break
+    }
+
+    case 'tool_end':
+      patch(assistantId, (draft) => ({
+        ...draft,
+        toolCalls: draft.toolCalls?.map((call) =>
+          call.id === event.id ? { ...call, output: event.output, status: 'done' } : call,
+        ),
+      }))
+      break
+
+    case 'sources':
+      patch(assistantId, (draft) => ({ ...draft, sources: event.sources }))
+      break
+
+    case 'done':
+      if (event.conversationId) conversation.current = event.conversationId
+      break
+
+    case 'error':
+      patch(assistantId, (draft) => ({ ...draft, error: event.message }))
+      break
+  }
 }
