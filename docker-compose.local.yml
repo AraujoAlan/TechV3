@@ -1,0 +1,25 @@
+# Override para servir o GGUF que está no disco, em vez de baixar do Hugging
+# Face. Útil para quem rodou o notebook 05 e já tem o arquivo — o download são
+# 2,8 GB.
+#
+#     docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+#
+# Combina com o override de GPU:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.local.yml \
+#                    -f docker-compose.gpu.yml up --build
+#
+# O caminho padrão é o que o `save_pretrained_gguf` do notebook 05 escreve.
+# Ajuste MODELO_GGUF_LOCAL no .env se o seu estiver em outro lugar.
+
+services:
+  modelo:
+    command: >
+      -m /modelos/Qwen3.5-4B.Q4_K_M.gguf
+      --alias assistente-maternidade
+      --host 0.0.0.0
+      --port 8080
+      --ctx-size 8192
+      --jinja
+    volumes:
+      - ${MODELO_GGUF_LOCAL:-./modelos/gguf_gguf}:/modelos:ro

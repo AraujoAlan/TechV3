@@ -1,0 +1,64 @@
+# Sobe o assistente inteiro: o modelo fine-tunado e a API que fala com ele.
+#
+#     docker compose up --build
+#
+# Depois, http://localhost:8000 — a interface e a API saem da mesma origem, que
+# é o que o contrato do frontend assume e o que dispensa CORS.
+#
+# Para usar a GPU NVIDIA:
+#
+#     docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#
+# O override troca a imagem e os parâmetros do serviço `modelo` mantendo o nome,
+# que é o que a API usa para achá-lo.
+
+services:
+  # O modelo fine-tunado dos notebooks 04-06, em GGUF, servido com API
+  # compatível com a da OpenAI. Na primeira subida ele baixa ~2,8 GB do
+  # Hugging Face para o volume; nas seguintes, reaproveita.
+  modelo:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    command: >
+      -hf emidiosouza/assistente-maternidade-gguf
+      --alias assistente-maternidade
+      --host 0.0.0.0
+      --port 8080
+      --ctx-size 8192
+      --jinja
+    volumes:
+      # O `-hf` baixa para o cache do Hugging Face, não para um cache próprio do
+      # llama.cpp — montar o caminho errado faz o download se repetir a cada
+      # recriação do container.
+      - modelos_hf:/root/.cache/huggingface
+    healthcheck:
+      # A imagem já traz um healthcheck; o que muda aqui é a carência. Sem ela o
+      # container aparece como "unhealthy" durante os minutos de download, que é
+      # exatamente quando ele está trabalhando.
+      start_period: 900s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # `service_started`, e não `service_healthy`, de propósito: na primeira
+    # subida o modelo passa minutos baixando, e não faz sentido esconder a
+    # interface até lá. Perguntar antes da hora devolve um erro explicado.
+    depends_on:
+      - modelo
+    environment:
+      # A chave do roteador vem do ambiente de quem sobe, nunca da imagem.
+      Z_API_KEY: ${Z_API_KEY:?defina Z_API_KEY no .env ou no ambiente}
+      ROTEADOR_MODELO: ${ROTEADOR_MODELO:-glm-5.3-flash}
+      REDATOR_BASE_URL: http://modelo:8080/v1
+      REDATOR_MODELO: assistente-maternidade
+    ports:
+      - "8000:8000"
+    volumes:
+      # A auditoria precisa sobreviver ao container: é o registro de
+      # rastreabilidade que a fase pede.
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  modelos_hf:

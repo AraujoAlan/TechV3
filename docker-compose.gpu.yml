@@ -1,0 +1,31 @@
+# Override para rodar o modelo na GPU NVIDIA.
+#
+#     docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#
+# Só troca imagem e parâmetros do serviço `modelo`. O nome do serviço continua o
+# mesmo, então a API não muda de configuração.
+#
+# Exige o NVIDIA Container Toolkit instalado no host. No Windows com WSL2, isso
+# vem junto com o Docker Desktop quando a integração WSL está ligada.
+#
+# Q4_K_M do 4B ocupa ~3 GB de VRAM com o contexto de 8k, então cabe folgado numa
+# placa de 8 GB.
+
+services:
+  modelo:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    command: >
+      -hf emidiosouza/assistente-maternidade-gguf
+      --alias assistente-maternidade
+      --host 0.0.0.0
+      --port 8080
+      --ctx-size 8192
+      --jinja
+      --n-gpu-layers 999
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

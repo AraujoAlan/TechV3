@@ -1,0 +1,37 @@
+# Pesos e checkpoints: ~13 GB. Sem esta linha o build context sozinho
+# inviabiliza a imagem -- e o modelo nao entra nela, e servido pelo llama-server.
+modelos/
+unsloth_compiled_cache/
+llama.cpp/
+*.gguf
+*.safetensors
+
+# Dados derivados do MedPT e do pipeline. dados_hospital/ NAO entra aqui:
+# e o banco que a aplicacao consulta e precisa ir para dentro da imagem.
+data/
+notebooks/
+dataset_exemplo/
+logs/
+
+# Dependencias que sao reinstaladas dentro da imagem
+.venv/
+venv/
+frontend/node_modules/
+frontend/dist/
+
+# Segredos: as chaves entram por variavel de ambiente no compose, nunca na
+# imagem -- o que esta na imagem vaza para quem tiver a imagem.
+.env
+.env.local
+frontend/.env.local
+
+# Ruido
+.git/
+.github/
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
