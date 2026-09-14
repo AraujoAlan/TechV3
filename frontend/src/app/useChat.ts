@@ -28,9 +28,18 @@ export function useChat(): UseChatResult {
 
   const abortRef = useRef<AbortController | null>(null)
   const conversationRef = useRef<string>(createId('conv'))
+  // Espelho do histórico, legível de forma síncrona. `send` precisa montar o
+  // corpo da requisição no mesmo tick em que é chamado, e o estado do React só
+  // fica disponível no render seguinte.
+  const historicoRef = useRef<Message[]>([])
 
   /** Aplica uma alteração na mensagem do assistente que está sendo montada. */
   const patchAssistant = useCallback((id: string, patch: (draft: Message) => Message) => {
+    // O ref acompanha o estado para que o próximo turno mande a resposta que o
+    // assistente realmente deu, e não a bolha vazia em que ela começou.
+    historicoRef.current = historicoRef.current.map((message) =>
+      message.id === id ? patch(message) : message,
+    )
     setMessages((current) =>
       current.map((message) => (message.id === id ? patch(message) : message)),
     )
@@ -59,15 +68,19 @@ export function useChat(): UseChatResult {
       }
 
       // O histórico enviado à API é o que existia + a pergunta nova.
-      // Lido do estado anterior para não depender de um render intermediário.
-      let history: Array<{ role: 'user' | 'assistant'; content: string }> = []
-      setMessages((current) => {
-        history = [...current, userMessage].map(({ role, content: body }) => ({
-          role,
-          content: body,
-        }))
-        return [...current, userMessage, assistantMessage]
-      })
+      //
+      // Sai do ref, e não do updater do `setMessages`: o updater só roda no
+      // render seguinte, então ler o histórico de dentro dele devolvia lista
+      // vazia para a requisição que parte agora — e a API recusa um corpo sem
+      // nenhuma mensagem.
+      const anteriores = historicoRef.current
+      const history = [...anteriores, userMessage].map(({ role, content: body }) => ({
+        role,
+        content: body,
+      }))
+
+      historicoRef.current = [...anteriores, userMessage, assistantMessage]
+      setMessages((current) => [...current, userMessage, assistantMessage])
 
       const controller = new AbortController()
       abortRef.current = controller
@@ -109,6 +122,7 @@ export function useChat(): UseChatResult {
   const reset = useCallback(() => {
     abortRef.current?.abort()
     conversationRef.current = createId('conv')
+    historicoRef.current = []
     setMessages([])
     setError(null)
     setStatus('idle')
