@@ -29,26 +29,41 @@ MAX_CHARS_CELULA = 300
 
 
 def _tabela_para_texto(df: pd.DataFrame) -> str:
-    """Formata um resultado para leitura pelo modelo, com os cortes declarados."""
+    """Formata um resultado para leitura pelo modelo, com os cortes declarados.
+
+    Espera receber até uma linha a mais do que se pretende mostrar: é assim que
+    a função descobre que houve corte. Sem essa linha extra o `LIMIT` do SQL já
+    teria devolvido exatamente o teto, e o corte seria invisível aqui — o modelo
+    leria vinte linhas achando que são todas, e responderia "o hospital tem
+    vinte casos" sobre um banco de dez mil.
+    """
     if df.empty:
         return "A consulta não retornou nenhuma linha."
 
     total = len(df)
     df = df.head(config.MAX_LINHAS_CONSULTA).copy()
 
+    # O corte é decidido pelo valor, e não pelo dtype da coluna. Checar
+    # `dtype == object` aqui deixava o pandas 3 passar batido: colunas de texto
+    # passaram a ter dtype `str`, o corte parava de rodar, e vinte prontuários
+    # inteiros seguiam para o prompt do redator.
     for coluna in df.columns:
-        if df[coluna].dtype == object:
-            df[coluna] = df[coluna].apply(
-                lambda v: (
-                    v[:MAX_CHARS_CELULA] + "…"
-                    if isinstance(v, str) and len(v) > MAX_CHARS_CELULA
-                    else v
-                )
+        df[coluna] = df[coluna].apply(
+            lambda v: (
+                v[:MAX_CHARS_CELULA] + "…"
+                if isinstance(v, str) and len(v) > MAX_CHARS_CELULA
+                else v
             )
+        )
 
     texto = df.to_string(index=False)
     if total > len(df):
-        texto += f"\n\n[mostrando {len(df)} de {total} linhas]"
+        # Sem afirmar um total: a linha extra prova que há mais, mas não diz
+        # quantas. Inventar o número aqui seria pior que não dizer.
+        texto += (
+            f"\n\n[mostrando as primeiras {len(df)} linhas; a consulta retornou "
+            "mais. Use agregação ou filtro para alcançar o resto.]"
+        )
     return texto
 
 
@@ -106,7 +121,9 @@ def consultar_banco_sql(sql: str) -> tuple[str, dict]:
     """
     try:
         df = banco.consultar_banco(
-            lambda ferramenta: ferramenta.consultar(sql, limite=config.MAX_LINHAS_CONSULTA)
+            lambda ferramenta: ferramenta.consultar(
+                sql, limite=config.MAX_LINHAS_CONSULTA + 1
+            )
         )
     except ValueError as erro:
         # Comando recusado pela camada somente-leitura: o modelo consegue
@@ -182,7 +199,7 @@ def estatisticas_de_diagnosticos(especialidade: str = "") -> tuple[str, dict]:
 
     df = banco.consultar_banco(
         lambda ferramenta: ferramenta.estatisticas_diagnostico(
-            especialidade=filtro, top=config.MAX_LINHAS_CONSULTA
+            especialidade=filtro, top=config.MAX_LINHAS_CONSULTA + 1
         )
     )
 
