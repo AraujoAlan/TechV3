@@ -44,20 +44,35 @@ async def transmitir(
     mensagem_id: str,
 ) -> AsyncIterator[str]:
     """Roda um turno e vai emitindo os eventos conforme eles acontecem."""
-    pergunta = next(
-        (m.content for m in reversed(mensagens_de_entrada) if isinstance(m, HumanMessage)),
-        "",
+    corte = max(
+        (
+            i
+            for i, m in enumerate(mensagens_de_entrada)
+            if isinstance(m, HumanMessage)
+        ),
+        default=-1,
     )
+    pergunta = str(mensagens_de_entrada[corte].content) if corte >= 0 else ""
+    # O grafo recria a pergunta do turno em `inicializar`; o que entra aqui é só
+    # o histórico anterior a ela, para não duplicar a fala do médico.
+    historico = mensagens_de_entrada[:corte] if corte >= 0 else []
 
     filtro = FiltroPensamento()
     fontes: dict[str, dict] = {}
     partes_da_resposta: list[str] = []
+    resposta_do_grafo = ""
 
     with RegistroDoTurno(conversa_id, pergunta) as registro:
         try:
-            async for modo, dado in agente.astream(
-                {"messages": mensagens_de_entrada},
+            async for _origem, modo, dado in agente.astream(
+                {"pergunta": pergunta, "messages": historico},
+                # O registro viaja pelo contexto, e não pelo estado: ele é um
+                # acumulador vivo do turno, não um dado que o grafo transforma.
+                config={"configurable": {"registro": registro}},
                 stream_mode=["updates", "messages"],
+                # O roteador é um subgrafo. Sem isto, as consultas dele só
+                # apareceriam na interface quando a recuperação inteira acabasse.
+                subgraphs=True,
             ):
                 if modo == "messages":
                     pedaco, metadados = dado
@@ -70,6 +85,18 @@ async def transmitir(
                         partes_da_resposta.append(texto)
                         yield evento_sse({"type": "token", "content": texto})
                     continue
+
+                for atualizacao in (dado or {}).values():
+                    if not isinstance(atualizacao, dict):
+                        continue
+                    if atualizacao.get("resposta"):
+                        resposta_do_grafo = atualizacao["resposta"]
+                    if atualizacao.get("criticidade") is not None:
+                        registro.criticidade = atualizacao[
+                            "criticidade"
+                        ].como_dicionario()
+                    if atualizacao.get("violacoes"):
+                        registro.violacoes = atualizacao["violacoes"]
 
                 for mensagem in _mensagens_do_update(dado):
                     if isinstance(mensagem, AIMessage) and mensagem.tool_calls:
@@ -102,6 +129,15 @@ async def transmitir(
             if resto:
                 partes_da_resposta.append(resto)
                 yield evento_sse({"type": "token", "content": resto})
+
+            # Nem toda resposta passa pelo stream do redator. O nó `limitacao`
+            # devolve texto escrito em código, e com revisão ligada os tokens
+            # ficam retidos até a validação aprovar. Nos dois casos o texto
+            # existe no estado e precisa chegar à tela — senão o médico vê uma
+            # bolha vazia fechar.
+            if not partes_da_resposta and resposta_do_grafo:
+                partes_da_resposta.append(resposta_do_grafo)
+                yield evento_sse({"type": "token", "content": resposta_do_grafo})
 
             resposta = "".join(partes_da_resposta)
             registro.resposta = resposta
