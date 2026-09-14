@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from app.contracts.errors import WorkflowServiceError
 from app.contracts.models import AlertRequest, CriticalityResult, CritiqueResult, InterpretationResult, Source
 from app.contracts.ports import AlertService, AuditLogger, AuthorizationService, CriticalityService, FinalAnswerLLM, GeneralLLM, MedicalRepository, SafetyValidator
-from .state import WorkflowState
+from .estado import WorkflowState
 
 SAFE_LIMITATION = "Não foi possível fornecer uma resposta clínica segura nesta execução. Procure avaliação de um profissional de saúde."
 CRITICAL_ESCALATION = "Como há sinais de alarme no contexto, recomenda-se busca imediata de avaliação humana."
