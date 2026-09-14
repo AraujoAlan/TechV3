@@ -28,6 +28,13 @@ def criar_redator() -> ChatOpenAI:
         api_key=config.REDATOR_API_KEY,
         temperature=config.REDATOR_TEMPERATURA,
         max_tokens=config.REDATOR_MAX_TOKENS,
+        # Desliga o raciocínio do chat template. Não é economia de token: o
+        # modelo foi treinado com o bloco `<think>` **vazio**, então raciocinar
+        # é que o tira da distribuição em que foi ajustado. Sem isso ele gasta o
+        # orçamento pensando em inglês e às vezes entrega resposta vazia.
+        # A flag `--reasoning-budget` do llama-server não afeta este template;
+        # o que funciona é o parâmetro na requisição.
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         # `streaming=True` faz o cliente consumir a resposta token a token mesmo
         # quando o agente chama `invoke`. É o que permite à camada de transmissão
         # capturar os tokens pelo stream do grafo.
