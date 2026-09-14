@@ -24,6 +24,55 @@ _lock = threading.Lock()
 PRIORIDADES = ("rotina", "urgente", "emergencia")
 
 
+def gravar_alerta(
+    *,
+    id_paciente: str,
+    mensagem: str,
+    prioridade: str = "urgente",
+    origem: str = "roteador",
+    codigo_regra: str | None = None,
+    versao_regra: str | None = None,
+) -> dict:
+    """Grava uma linha em `logs/alertas.jsonl` e devolve o registro.
+
+    Existem dois caminhos até aqui, e é de propósito. O nó `alerta` do grafo
+    chama esta função quando a regra de criticidade dispara — determinístico,
+    com `codigo_regra` preenchido. A tool abaixo chama quando o roteador julga
+    que a equipe precisa saber de algo que só se vê lendo o prontuário.
+
+    O formato é um só porque quem lê o arquivo depois não deveria precisar
+    saber qual caminho produziu a linha; o campo `origem` responde isso sem
+    exigir dois esquemas.
+    """
+    prioridade = prioridade.strip().lower()
+    if prioridade not in PRIORIDADES:
+        prioridade = "urgente"
+
+    momento = datetime.now(timezone.utc)
+    identificador = f"ALERTA-{momento.strftime('%Y%m%d%H%M%S')}-{id_paciente}"
+
+    registro = {
+        "id": identificador,
+        "quando": momento.isoformat(),
+        "id_paciente": id_paciente,
+        "prioridade": prioridade,
+        "mensagem": mensagem,
+        "origem": origem,
+        "codigo_regra": codigo_regra,
+        "versao_regra": versao_regra,
+        # O alerta é sugestão do assistente até alguém da equipe confirmar.
+        # Registrar isso aqui é o que impede que ele seja lido depois como
+        # decisão clínica tomada.
+        "validado_por_humano": False,
+    }
+
+    CAMINHO_ALERTAS.parent.mkdir(parents=True, exist_ok=True)
+    with _lock, CAMINHO_ALERTAS.open("a", encoding="utf-8") as arquivo:
+        arquivo.write(json.dumps(registro, ensure_ascii=False) + "\n")
+
+    return registro
+
+
 @tool(response_format="content_and_artifact")
 def registrar_alerta_equipe(
     id_paciente: str, mensagem: str, prioridade: str = "urgente"
@@ -39,29 +88,11 @@ def registrar_alerta_equipe(
         mensagem: o que a equipe precisa saber, em uma frase.
         prioridade: rotina, urgente ou emergencia.
     """
-    prioridade = prioridade.strip().lower()
-    if prioridade not in PRIORIDADES:
-        prioridade = "urgente"
-
-    momento = datetime.now(timezone.utc)
-    identificador = f"ALERTA-{momento.strftime('%Y%m%d%H%M%S')}-{id_paciente}"
-
-    registro = {
-        "id": identificador,
-        "quando": momento.isoformat(),
-        "id_paciente": id_paciente,
-        "prioridade": prioridade,
-        "mensagem": mensagem,
-        "origem": "assistente-virtual",
-        # O alerta é sugestão do assistente até alguém da equipe confirmar.
-        # Registrar isso aqui é o que impede que ele seja lido depois como
-        # decisão clínica tomada.
-        "validado_por_humano": False,
-    }
-
-    CAMINHO_ALERTAS.parent.mkdir(parents=True, exist_ok=True)
-    with _lock, CAMINHO_ALERTAS.open("a", encoding="utf-8") as arquivo:
-        arquivo.write(json.dumps(registro, ensure_ascii=False) + "\n")
+    registro = gravar_alerta(
+        id_paciente=id_paciente, mensagem=mensagem, prioridade=prioridade
+    )
+    identificador = registro["id"]
+    prioridade = registro["prioridade"]
 
     texto = (
         f"Alerta {identificador} registrado ({prioridade}) para o paciente "
